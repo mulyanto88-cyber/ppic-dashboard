@@ -1,36 +1,15 @@
 import { sb } from "../lib/supabase";
+import { fmt, rp, ym } from "../lib/format";
 
 export const dynamic = "force-dynamic";
 
-/* ---------- formatters ---------- */
-const MON = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
-function fmt(n) {
-  if (n === null || n === undefined || n === "") return "—";
-  return new Intl.NumberFormat("id-ID").format(Math.round(Number(n)));
-}
-function rp(n) {
-  const v = Number(n);
-  if (!isFinite(v)) return "—";
-  const a = Math.abs(v);
-  if (a >= 1e12) return "Rp " + (v / 1e12).toFixed(2).replace(".", ",") + " T";
-  if (a >= 1e9)  return "Rp " + (v / 1e9).toFixed(2).replace(".", ",") + " M";
-  if (a >= 1e6)  return "Rp " + (v / 1e6).toFixed(1).replace(".", ",") + " jt";
-  return "Rp " + fmt(v);
-}
-function ym(dstr) {
-  const d = new Date(dstr);
-  if (isNaN(d)) return dstr;
-  return MON[d.getMonth()] + " " + String(d.getFullYear()).slice(2);
-}
-
-/* ---------- CSS bar chart ---------- */
-function BarChart({ data, valueKey, labelKey, showVal, fmtVal, highlight }) {
+function BarChart({ data, valueKey, labelKey, showVal, fmtVal }) {
   const max = Math.max(1, ...data.map((d) => Number(d[valueKey]) || 0));
   return (
     <div className="barchart">
       {data.map((d, i) => {
         const v = Number(d[valueKey]) || 0;
-        const hl = highlight ? highlight(d, i) : false;
+        const hl = d._hl;
         return (
           <div className="bar-col" key={i}>
             {showVal && <div className="bar-val">{fmtVal ? fmtVal(v) : fmt(v)}</div>}
@@ -43,7 +22,7 @@ function BarChart({ data, valueKey, labelKey, showVal, fmtVal, highlight }) {
   );
 }
 
-export default async function SalesDemand() {
+export default async function DemandAnalytics() {
   let revenue = [], payday = [], skuValue = [], seg = [], matrix = [], movement = [], watch = [];
   let error = null;
   try {
@@ -65,93 +44,84 @@ export default async function SalesDemand() {
   if (error) {
     return (
       <div className="card error">
-        <h2>Gagal memuat data</h2>
+        <h2>Failed to load data</h2>
         <pre>{error}</pre>
         <p>
-          Cek env <code>SUPABASE_URL</code> &amp; <code>SUPABASE_SERVICE_ROLE_KEY</code> di
-          Vercel, dan schema <code>ppic</code> ada di Exposed schemas.
+          Check <code>SUPABASE_URL</code> &amp; <code>SUPABASE_SERVICE_ROLE_KEY</code> in
+          Vercel, and that schema <code>ppic</code> is in Exposed schemas.
         </p>
       </div>
     );
   }
 
-  /* ---- KPIs from value view ---- */
   const totalValue = skuValue.reduce((s, r) => s + Number(r.value_12m || 0), 0);
   const totalQty = skuValue.reduce((s, r) => s + Number(r.qty_12m || 0), 0);
   const avgPrice = totalQty > 0 ? totalValue / totalQty : 0;
   const nA = skuValue.filter((r) => r.abc_tier_value === "A").length;
   const lastMonth = revenue.length ? revenue[revenue.length - 1].month : null;
 
-  /* ---- merge segmentation into top-value table ---- */
   const segMap = {};
   for (const s of seg) segMap[s.sku_name] = s;
   const topValue = skuValue.slice(0, 12);
-
   const rev18 = revenue.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) }));
+  const paydayData = payday.map((d) => ({
+    ...d,
+    _hl: /payday|29\+/.test(String(d.week_of_month)),
+  }));
 
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">Sales &amp; Demand</h1>
+        <h1 className="page-title">Demand Analytics</h1>
         <div className="page-sub">
-          FG status Continue · data s/d {lastMonth ? ym(lastMonth) : "—"} · basis 12 bulan
+          Active FG (Continue) · data through {lastMonth ? ym(lastMonth) : "—"} · 12-month basis
         </div>
       </div>
 
-      {/* KPI row */}
       <section className="kpi-grid">
         <div className="card">
-          <div className="kpi-label">Revenue 12 bln</div>
+          <div className="kpi-label">Revenue (12 mo)</div>
           <div className="kpi-value">{rp(totalValue)}</div>
-          <div className="kpi-sub">nilai penjualan (Rp)</div>
+          <div className="kpi-sub">sales value (IDR)</div>
         </div>
         <div className="card">
-          <div className="kpi-label">Qty 12 bln</div>
+          <div className="kpi-label">Units Sold (12 mo)</div>
           <div className="kpi-value">{fmt(totalQty)}</div>
-          <div className="kpi-sub">unit terkirim</div>
+          <div className="kpi-sub">units delivered</div>
         </div>
         <div className="card">
-          <div className="kpi-label">Harga rata-rata</div>
+          <div className="kpi-label">Avg. Price / Unit</div>
           <div className="kpi-value">{rp(avgPrice)}</div>
-          <div className="kpi-sub">per unit</div>
+          <div className="kpi-sub">blended</div>
         </div>
         <div className="card">
-          <div className="kpi-label">SKU aktif</div>
+          <div className="kpi-label">Active SKUs</div>
           <div className="kpi-value">{fmt(skuValue.length)}</div>
-          <div className="kpi-sub">{fmt(nA)} tier A (value)</div>
+          <div className="kpi-sub">{fmt(nA)} Tier A (by value)</div>
         </div>
       </section>
 
-      {/* Revenue trend */}
       <div className="card">
-        <h2 className="card-title">Tren Revenue Bulanan</h2>
-        <div className="card-note">18 bulan terakhir · nilai penjualan (Rp)</div>
+        <h2 className="card-title">Monthly Revenue Trend</h2>
+        <div className="card-note">Last 18 months · sales value (IDR)</div>
         <BarChart data={rev18} valueKey="revenue_idr" labelKey="_lbl" />
       </div>
 
       <section className="grid-2">
-        {/* Payday */}
         <div className="card">
-          <h2 className="card-title">Pola Payday (minggu-dalam-bulan)</h2>
-          <div className="card-note">rata-rata qty/minggu · 12 bln · hijau = zona payday (≥ tgl 22)</div>
+          <h2 className="card-title">Payday Pattern (week of month)</h2>
+          <div className="card-note">avg units/week · 12 mo · green = payday window (day ≥ 22)</div>
           <div className="payday">
-            <BarChart
-              data={payday}
-              valueKey="avg_qty"
-              labelKey="week_of_month"
-              showVal
-              highlight={(d) => /payday|29\+/.test(String(d.week_of_month))}
-            />
+            <BarChart data={paydayData} valueKey="avg_qty" labelKey="week_of_month" showVal />
           </div>
         </div>
 
-        {/* Movement distribution */}
         <div className="card">
-          <h2 className="card-title">Distribusi Velocity</h2>
-          <div className="card-note">jumlah SKU per kelas kecepatan gerak</div>
+          <h2 className="card-title">Velocity Distribution</h2>
+          <div className="card-note">SKU count by movement class</div>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Kelas</th><th className="num">SKU</th><th className="num">Qty 12 bln</th></tr></thead>
+              <thead><tr><th>Class</th><th className="num">SKUs</th><th className="num">Units (12 mo)</th></tr></thead>
               <tbody>
                 {movement.map((m, i) => (
                   <tr key={i}>
@@ -166,18 +136,17 @@ export default async function SalesDemand() {
         </div>
       </section>
 
-      {/* Top SKU by value */}
       <div className="card">
-        <h2 className="card-title">Top 12 SKU — Kontribusi Revenue</h2>
-        <div className="card-note">urut dari nilai penjualan (Rp) 12 bulan tertinggi</div>
+        <h2 className="card-title">Top 12 SKUs — Revenue Contribution</h2>
+        <div className="card-note">ranked by 12-month sales value (IDR)</div>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>SKU</th>
                 <th className="num">Revenue</th>
-                <th className="num">Qty</th>
-                <th className="num">Harga/unit</th>
+                <th className="num">Units</th>
+                <th className="num">Price/Unit</th>
                 <th>ABC (value)</th>
                 <th>XYZ</th>
                 <th>Trend</th>
@@ -204,13 +173,12 @@ export default async function SalesDemand() {
       </div>
 
       <section className="grid-2">
-        {/* ABC x XYZ matrix */}
         <div className="card">
-          <h2 className="card-title">Matriks ABC × XYZ</h2>
-          <div className="card-note">jumlah SKU per kombinasi (basis qty)</div>
+          <h2 className="card-title">ABC × XYZ Matrix</h2>
+          <div className="card-note">SKU count per combination (qty basis)</div>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>ABC</th><th>XYZ</th><th className="num">SKU</th><th className="num">Qty 12 bln</th></tr></thead>
+              <thead><tr><th>ABC</th><th>XYZ</th><th className="num">SKUs</th><th className="num">Units (12 mo)</th></tr></thead>
               <tbody>
                 {matrix.map((m, i) => (
                   <tr key={i}>
@@ -225,13 +193,12 @@ export default async function SalesDemand() {
           </div>
         </div>
 
-        {/* Trend watchlist */}
         <div className="card">
-          <h2 className="card-title">Watchlist Momentum</h2>
-          <div className="card-note">SKU A/B melemah atau C sedang naik</div>
+          <h2 className="card-title">Momentum Watchlist</h2>
+          <div className="card-note">A/B SKUs declining or C SKUs rising</div>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>SKU</th><th>ABC</th><th className="num">Qty 12 bln</th><th>Trend</th></tr></thead>
+              <thead><tr><th>SKU</th><th>ABC</th><th className="num">Units (12 mo)</th><th>Trend</th></tr></thead>
               <tbody>
                 {watch.map((r, i) => (
                   <tr key={i}>
@@ -242,7 +209,7 @@ export default async function SalesDemand() {
                   </tr>
                 ))}
                 {watch.length === 0 && (
-                  <tr><td colSpan={4} style={{ color: "var(--muted)" }}>Tak ada SKU pada watchlist.</td></tr>
+                  <tr><td colSpan={4} style={{ color: "var(--muted)" }}>No SKUs on watchlist.</td></tr>
                 )}
               </tbody>
             </table>
