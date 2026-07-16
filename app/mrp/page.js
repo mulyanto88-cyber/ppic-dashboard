@@ -36,10 +36,13 @@ export default async function MRP() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">MRP — Material Requirements</h1>
-        <div className="page-sub">
-          FG demand × BOM → weekly material consumption vs stock position · min stock 45 days
+        <div>
+          <h1 className="page-title">MRP — Material Requirements</h1>
+          <div className="page-sub">
+            FG demand × BOM → weekly material consumption vs stock position · min stock 45 days
+          </div>
         </div>
+        <a className="btn-export" href="/api/export?view=v_mrp">↓ Export CSV</a>
       </div>
 
       <section className="kpi-grid">

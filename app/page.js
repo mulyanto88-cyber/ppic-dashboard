@@ -72,10 +72,13 @@ export default async function DemandAnalytics() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">Demand Analytics</h1>
-        <div className="page-sub">
-          Active FG (Continue) · data through {lastMonth ? ym(lastMonth) : "—"} · 12-month basis
+        <div>
+          <h1 className="page-title">Demand Analytics</h1>
+          <div className="page-sub">
+            Active FG (Continue) · data through {lastMonth ? ym(lastMonth) : "—"} · 12-month basis
+          </div>
         </div>
+        <a className="btn-export" href="/api/export?view=v_sku_segmentation">↓ Export CSV</a>
       </div>
 
       <section className="kpi-grid">

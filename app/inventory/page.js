@@ -56,8 +56,11 @@ export default async function InventoryHealth() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">Inventory Health</h1>
-        <div className="page-sub">Finished Goods · clean SOH · value = est. (SOH × avg sales price)</div>
+        <div>
+          <h1 className="page-title">Inventory Health</h1>
+          <div className="page-sub">Finished Goods · clean SOH · value = est. (SOH × avg sales price)</div>
+        </div>
+        <a className="btn-export" href="/api/export?view=v_inventory_fg">↓ Export CSV</a>
       </div>
 
       <section className="kpi-grid">

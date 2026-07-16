@@ -35,8 +35,11 @@ export default async function POMonitoring() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">PO Monitoring</h1>
-        <div className="page-sub">Open purchase orders · outstanding = ordered − received · for supplier follow-up</div>
+        <div>
+          <h1 className="page-title">PO Monitoring</h1>
+          <div className="page-sub">Open purchase orders · outstanding = ordered − received · for supplier follow-up</div>
+        </div>
+        <a className="btn-export" href="/api/export?view=v_po_open_lines">↓ Export CSV</a>
       </div>
 
       <section className="kpi-grid">

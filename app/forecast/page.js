@@ -67,8 +67,11 @@ export default async function Forecast() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">Forecast</h1>
-        <div className="page-sub">WMA method (0.6 / 0.3 / 0.1) · Active FG · 3-month horizon</div>
+        <div>
+          <h1 className="page-title">Forecast</h1>
+          <div className="page-sub">WMA method (0.6 / 0.3 / 0.1) · Active FG · 3-month horizon</div>
+        </div>
+        <a className="btn-export" href="/api/export?view=v_forecast_monthly">↓ Export CSV</a>
       </div>
 
       <section className="kpi-grid">
