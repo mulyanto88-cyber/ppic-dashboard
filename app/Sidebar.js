@@ -4,9 +4,9 @@ import { usePathname } from "next/navigation";
 const NAV = [
   { href: "/", label: "Demand Analytics" },
   { href: "/forecast", label: "Forecast" },
+  { href: "/inventory", label: "Inventory Health" },
   { href: "/glossary", label: "Glossary" },
-  { href: "#", label: "Inventory", soon: true },
-  { href: "#", label: "Planning", soon: true },
+  { href: "#", label: "Planning (MPS)", soon: true },
   { href: "#", label: "MRP", soon: true },
   { href: "#", label: "Procurement", soon: true },
 ];
