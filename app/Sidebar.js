@@ -5,16 +5,16 @@ const NAV = [
   { href: "/", label: "Demand Analytics" },
   { href: "/forecast", label: "Forecast" },
   { href: "/inventory", label: "Inventory Health" },
+  { href: "/po-monitoring", label: "PO Monitoring" },
+  { href: "/planning", label: "Planning (MPS)" },
+  { href: "/mrp", label: "MRP" },
   { href: "/glossary", label: "Glossary" },
-  { href: "#", label: "Planning (MPS)", soon: true },
-  { href: "#", label: "MRP", soon: true },
-  { href: "#", label: "Procurement", soon: true },
 ];
 
 export default function Sidebar() {
   const path = usePathname();
   return (
-    <aside className="sidebar">
+    <header className="navbar">
       <div className="brand">
         PPIC<span>·Dashboard</span>
       </div>
@@ -34,6 +34,6 @@ export default function Sidebar() {
         })}
       </nav>
       <div className="sidebar-foot">PT FOOM Lab Global</div>
-    </aside>
+    </header>
   );
 }
