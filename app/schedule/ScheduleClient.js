@@ -119,6 +119,7 @@ const formatCapRange = (line, wcap) => {
 export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatrix = [] }) {
   const [page, setPage] = useState(0);
   const [mode, setMode] = useState("weekly");     // "weekly" | "daily"
+  const [strategy, setStrategy] = useState("level"); // daily: "level" (rata harian) | "front" (urgensi)
 
   const patternMap = useMemo(() => {
     const m = {}; for (const r of pattern) m[Number(r.week_of_month)] = Number(r.factor); return m;
@@ -222,14 +223,17 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     return out;
   }, []);
 
-  // Leveling finite-capacity: sebar produksi W1+W2 ke hari kerja.
-  // Prioritas = cover terendah (paling dekat stockout) dijadwalkan paling awal.
-  // Line ber-kapasitas: front-load, patuh cap harian (mingguan × shift ÷ 16.5)
-  // dan maks 5 SKU/line/hari (changeover). W1 yang tak muat tumpah ke W2 (spill).
-  // Line tanpa kapasitas (Assembly/Other): disebar rata di minggunya.
+  // Jadwal harian 2 minggu — DUA strategi:
+  //  "level" (default) = HEIJUNKA: total kebutuhan line disebar RATA per hari
+  //     (proporsional shift; Sabtu ½) → qty per hari/shift stabil, sisa kapasitas
+  //     per hari jelas (jendela OEM). SKU kritis tetap dapat slot paling awal.
+  //  "front" = urgensi: isi hari paling awal sampai penuh (pola lama).
+  // Keduanya patuh: kapasitas harian dinamis (CAPACITY_RULES per jumlah SKU),
+  // lot 500, maks 5 SKU/line/hari, dan MATERIAL GATE (pass A, urut prioritas).
   const daily = useMemo(() => {
     const nD = days.length;
     const w2start = days.findIndex((d) => d.week === 1);
+    const totalShiftW = days.reduce((s, d) => s + d.shifts, 0);   // 33
     const load = {}; const skusOnDay = {};
     for (const L of lines) {
       load[L] = Array(nD).fill(0);
@@ -245,8 +249,6 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       }))
       .sort((a, b) => a.cover - b.cover || (b.req1 + b.req2) - (a.req1 + a.req2));
 
-    const list = [];
-    let unfitTotal = 0, matShortTotal = 0;
     const avail = {};
     for (const k in mat.pool) avail[k] = mat.pool[k].avail;
 
@@ -263,81 +265,133 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       return wcap ? (wcap * shifts) / WEEK_SHIFTS : Infinity;
     };
 
-    for (const x of prio) {
-      const line = x.r.prod_line;
-      const wcap = capMap[line];
-      const alloc = Array(nD).fill(0);
-      let spill = 0, unfit = 0;
-
-      // Material gate
+    // ---- PASS A: material gate (urut prioritas — material langka ke SKU kritis)
+    const gated = prio.map((x) => {
       const comps = mat.bomMap[String(x.r.sku_name).toUpperCase().trim()] || [];
       let req1 = x.req1, req2 = x.req2, matShort = 0, limComp = null, limSoh = null, limInc = null;
-      {
-        let mx = Infinity, lim = null;
-        for (const c of comps) {
-          if (c.p > 0) {
-            const a = avail[c.k];
-            if (a != null && a !== Infinity) {
-              const u = Math.floor(a / c.p);
-              if (u < mx) { mx = u; lim = c; }
-            }
-          }
-        }
-        const buildable = mx === Infinity ? Infinity : Math.max(0, Math.floor(mx / LOT) * LOT);
-        if (buildable < req1 + req2) {
-          matShort = req1 + req2 - buildable;
-          limComp = lim ? mat.pool[lim.k].name : null;
-          limSoh = lim ? Math.max(0, Math.round(avail[lim.k])) : null;
-          limInc = lim ? mat.pool[lim.k].inc : null;
-          const cut2 = Math.min(req2, matShort);
-          req2 -= cut2;
-          req1 -= matShort - cut2;
-        }
-        const sched = req1 + req2;
-        for (const c of comps) {
+      let mx = Infinity, lim = null;
+      for (const c of comps) {
+        if (c.p > 0) {
           const a = avail[c.k];
-          if (a != null && a !== Infinity) avail[c.k] = a - sched * c.p;
+          if (a != null && a !== Infinity) {
+            const u = Math.floor(a / c.p);
+            if (u < mx) { mx = u; lim = c; }
+          }
         }
       }
+      const buildable = mx === Infinity ? Infinity : Math.max(0, Math.floor(mx / LOT) * LOT);
+      if (buildable < req1 + req2) {
+        matShort = req1 + req2 - buildable;
+        limComp = lim ? mat.pool[lim.k].name : null;
+        limSoh = lim ? Math.max(0, Math.round(avail[lim.k])) : null;
+        limInc = lim ? mat.pool[lim.k].inc : null;
+        const cut2 = Math.min(req2, matShort);
+        req2 -= cut2;
+        req1 -= matShort - cut2;
+      }
+      const sched = req1 + req2;
+      for (const c of comps) {
+        const a = avail[c.k];
+        if (a != null && a !== Infinity) avail[c.k] = a - sched * c.p;
+      }
+      return { x, req1, req2, matShort, limComp, limSoh, limInc };
+    });
 
-      if (!wcap) {
-        // tanpa kapasitas (Assembly/Other)
-        const spread = (req, from, to) => {
-          if (req <= 0) return;
-          const n = to - from + 1;
-          const lots = Math.round(req / LOT);
-          const base = Math.floor(lots / n), extra = lots % n;
-          for (let i = from; i <= to; i++) {
-            const v = (base + (i - from < extra ? 1 : 0)) * LOT;
+    // ---- Target LEVEL per line per hari (share proporsional shift, lot 500) ---
+    const levelCap = {};
+    if (strategy === "level") {
+      const lineReq = {};
+      for (const g of gated) {
+        const L = g.x.r.prod_line;
+        lineReq[L] = (lineReq[L] || 0) + g.req1 + g.req2;
+      }
+      for (const L in lineReq) {
+        const tot = lineReq[L];
+        const arr = Array(nD).fill(0);
+        let cum = 0, given = 0;
+        for (let i = 0; i < nD; i++) {
+          cum += (tot * days[i].shifts) / totalShiftW;
+          const want = Math.round(cum / LOT) * LOT;
+          arr[i] = Math.max(0, want - given);
+          given += arr[i];
+        }
+        if (given < tot) arr[nD - 1] += tot - given;
+        levelCap[L] = arr;
+      }
+    }
+
+    const list = [];
+    let unfitTotal = 0, matShortTotal = 0;
+
+    // ---- PASS B: alokasi harian per SKU (urut prioritas) ----------------------
+    for (const g of gated) {
+      const { x, req1, req2, matShort, limComp, limSoh, limInc } = g;
+      const line = x.r.prod_line;
+      const hasCapModel = !!(getRulesForLine(line) || capMap[line]);
+      const alloc = Array(nD).fill(0);
+      let unfit = 0;
+
+      if (!hasCapModel) {
+        // Assembly/Other (tanpa model kapasitas)
+        if (strategy === "level") {
+          // sebar merata seluruh 12 hari (bobot shift, Sabtu ½), lot 500
+          const req = req1 + req2;
+          let cum = 0, given = 0;
+          for (let i = 0; i < nD; i++) {
+            cum += (req * days[i].shifts) / totalShiftW;
+            const want = Math.round(cum / LOT) * LOT;
+            const v = Math.max(0, want - given); given += v;
             alloc[i] += v; load[line][i] += v;
           }
-        };
-        spread(req1, 0, w2start - 1);
-        spread(req2, w2start, nD - 1);
+          if (given < req) { alloc[nD - 1] += req - given; load[line][nD - 1] += req - given; }
+        } else {
+          const spread = (req, from, to) => {
+            if (req <= 0) return;
+            const n = to - from + 1;
+            const lots = Math.round(req / LOT);
+            const base = Math.floor(lots / n), extra = lots % n;
+            for (let i = from; i <= to; i++) {
+              const v = (base + (i - from < extra ? 1 : 0)) * LOT;
+              alloc[i] += v; load[line][i] += v;
+            }
+          };
+          spread(req1, 0, w2start - 1);
+          spread(req2, w2start, nD - 1);
+        }
       } else {
-        const place = (reqIn, from, isW1) => {
+        const place = (reqIn, from, useLevel) => {
           let req = reqIn;
           for (let i = from; i < nD && req > 0; i++) {
             const isNewSku = !skusOnDay[line][i].has(x.r.sku_name);
-            const nextSkuCount = skusOnDay[line][i].size + (isNewSku ? 1 : 0);
-            
             if (isNewSku && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
-            
+            const nextSkuCount = skusOnDay[line][i].size + (isNewSku ? 1 : 0);
+
             const cap = getDailyCap(line, i, nextSkuCount);
-            const free = cap - load[line][i];
+            let free = cap - load[line][i];
+            if (useLevel && levelCap[line]) free = Math.min(free, levelCap[line][i] - load[line][i]);
             const take = Math.min(req, Math.floor(free / LOT) * LOT);
             if (take <= 0) continue;
-            
+
             alloc[i] += take; load[line][i] += take;
             if (isNewSku) skusOnDay[line][i].add(x.r.sku_name);
-            if (isW1 && days[i].week === 1) spill += take;
             req -= take;
           }
           return req;
         };
-        unfit += place(req1, 0, true);
-        unfit += place(req2, w2start, false);
+        if (strategy === "level") {
+          // pass 1 patuh target level; pass 2 longgarkan level (tetap patuh kapasitas)
+          let left = place(req1 + req2, 0, true);
+          if (left > 0) left = place(left, 0, false);
+          unfit += left;
+        } else {
+          unfit += place(req1, 0, false);
+          unfit += place(req2, w2start, false);
+        }
       }
+
+      // spill = bagian kebutuhan W1 yang terparkir di minggu-2
+      const week1Alloc = alloc.slice(0, w2start).reduce((s, v) => s + v, 0);
+      const spill = Math.max(0, Math.round(req1 - week1Alloc - unfit));
 
       unfitTotal += unfit;
       matShortTotal += matShort;
@@ -346,7 +400,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
         cover: x.cover,
         alloc: alloc.map((v) => Math.round(v)),
         total2: Math.round(alloc.reduce((s, v) => s + v, 0)),
-        spill: Math.round(spill),
+        spill,
         unfit: Math.round(unfit),
         matShort: Math.round(matShort),
         need2: x.req1 + x.req2,
@@ -363,7 +417,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       list, load, w2start, dayTotals, skusOnDay,
       kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), matShort: Math.round(matShortTotal), spillSkus },
     };
-  }, [rows, days, capMap, lines, mat]);
+  }, [rows, days, capMap, lines, mat, strategy]);
 
   // ---- pagination (dipakai dua mode) -----------------------------------------
   const tableRows = mode === "daily" ? daily.list : rows;
