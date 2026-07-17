@@ -161,22 +161,29 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
       let spill = 0, unfit = 0;
 
       if (!wcap) {
+        // tanpa kapasitas (Assembly/Other): sebar rata dalam LOT 500, hari awal dapat lot ekstra
         const spread = (req, from, to) => {
           if (req <= 0) return;
-          const per = req / (to - from + 1);
-          for (let i = from; i <= to; i++) { alloc[i] += per; load[line][i] += per; }
+          const n = to - from + 1;
+          const lots = Math.round(req / LOT);
+          const base = Math.floor(lots / n), extra = lots % n;
+          for (let i = from; i <= to; i++) {
+            const v = (base + (i - from < extra ? 1 : 0)) * LOT;
+            alloc[i] += v; load[line][i] += v;
+          }
         };
         spread(x.req1, 0, w2start - 1);
         spread(x.req2, w2start, nD - 1);
       } else {
         const place = (reqIn, from, isW1) => {
           let req = reqIn;
-          for (let i = from; i < nD && req > 0.5; i++) {
+          for (let i = from; i < nD && req > 0; i++) {
             const cap = (wcap * days[i].shifts) / WEEK_SHIFTS;
             const free = cap - load[line][i];
-            if (free <= 0) continue;
+            // alokasi harian dalam KELIPATAN LOT 500 (batch produksi riil)
+            const take = Math.min(req, Math.floor(free / LOT) * LOT);
+            if (take <= 0) continue;
             if (!skusOnDay[line][i].has(x.r.sku_name) && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
-            const take = Math.min(req, free);
             alloc[i] += take; load[line][i] += take;
             skusOnDay[line][i].add(x.r.sku_name);
             if (isW1 && days[i].week === 1) spill += take;
@@ -191,17 +198,21 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
       unfitTotal += unfit;
       list.push({
         ...x.r,
+        cover: x.cover,
         alloc: alloc.map((v) => Math.round(v)),
         total2: Math.round(alloc.reduce((s, v) => s + v, 0)),
         spill: Math.round(spill),
         unfit: Math.round(unfit),
       });
     }
-    list.sort((a, b) => b.total2 - a.total2);
+    // list TIDAK di-sort ulang: urutan = urutan prioritas alokasi (cover terendah dulu)
+
+    const dayTotals = Array(nD).fill(0);
+    for (const L of Object.keys(load)) load[L].forEach((v, i) => { dayTotals[i] += v; });
 
     const total = list.reduce((s, r) => s + r.total2, 0);
     const spillSkus = list.filter((r) => r.spill > 0).length;
-    return { list, load, w2start, kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), spillSkus } };
+    return { list, load, w2start, dayTotals, kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), spillSkus } };
   }, [rows, days, capMap, lines]);
 
   // ---- pagination (dipakai dua mode) -----------------------------------------
@@ -216,8 +227,9 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
     const stamp = new Date().toISOString().slice(0, 10);
     if (mode === "daily") {
       downloadCSV(
-        ["SKU", "Line", "ABC", ...days.map((d) => d.iso), "Total", "W1_shifted_to_W2", "Unscheduled"],
-        daily.list.map((r) => [r.sku_name, r.prod_line, r.abc_tier || "", ...r.alloc, r.total2, r.spill, r.unfit]),
+        ["Priority", "SKU", "Line", "ABC", "Cover_wk", ...days.map((d) => d.iso), "Total", "W1_shifted_to_W2", "Unscheduled"],
+        daily.list.map((r, i) => [i + 1, r.sku_name, r.prod_line, r.abc_tier || "",
+          isFinite(r.cover) ? Math.round(r.cover * 10) / 10 : "", ...r.alloc, r.total2, r.spill, r.unfit]),
         `production_schedule_daily_${stamp}.csv`
       );
     } else {
@@ -233,6 +245,21 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
     const ds = days.filter((d) => d.week === wIdx);
     return ds.length ? dmon(ds[0].iso) + " – " + dmon(ds[ds.length - 1].iso) : "";
   };
+
+  // Total per shift per hari (semua line): Sen–Jum dibagi 3 shift rata;
+  // Sabtu ½ hari = shift 1 penuh + shift 2 setengah, tanpa shift 3.
+  const shiftVal = (i, s) => {
+    const t = Math.round(daily.dayTotals[i]);
+    if (days[i].shifts === 1.5) {
+      if (s === 2) return null;
+      const s1 = Math.round((t * 2) / 3);
+      return s === 0 ? s1 : t - s1;
+    }
+    const third = Math.round(t / 3);
+    return s === 2 ? t - 2 * third : third;
+  };
+
+  const coverColor = (c) => (c < 1 ? "var(--red)" : c < 4.3 ? "var(--amber)" : "var(--green)");
 
   return (
     <>
@@ -410,6 +437,52 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
         </div>
       )}
 
+      {mode === "daily" && (
+        <div className="card">
+          <h2 className="card-title">Shift Totals — All Lines</h2>
+          <div className="card-note">
+            total units per shift per day · Mon–Fri 3 shifts (even split) · Sat ½ day = shift 1 full + shift 2 half, no shift 3
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th rowSpan={2}>Shift</th>
+                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
+                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                </tr>
+                <tr>
+                  {days.map((d) => <th className="num" key={d.iso}>{d.lbl}{d.shifts === 1.5 ? " ½" : ""}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {[0, 1, 2].map((s) => (
+                  <tr key={s}>
+                    <td className="name">Shift {s + 1}</td>
+                    {days.map((d, i) => {
+                      const v = shiftVal(i, s);
+                      return (
+                        <td className="num" key={i} style={v === null || v === 0 ? { color: "var(--muted)" } : {}}>
+                          {v === null ? "—" : v === 0 ? "—" : fmt(v)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700 }}>
+                  <td className="name">Total / day</td>
+                  {days.map((d, i) => (
+                    <td className="num" key={i}>
+                      {Math.round(daily.dayTotals[i]) === 0 ? "—" : fmt(daily.dayTotals[i])}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <h2 className="card-title">
           {mode === "daily"
@@ -418,7 +491,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
         </h2>
         <div className="card-note">
           {mode === "daily"
-            ? `units per day · earliest slots go to lowest stock cover · ⚠ = part of week-1 need shifted to week 2 · ${PER} rows per page`
+            ? `sorted by PRIORITY — lowest stock cover first (# = production order) · qty in lots of ${fmt(LOT)} · ⚠ = week-1 need shifted to week 2 · ${PER} rows per page`
             : `units to produce each week to hold 30-day cover · 💰 = payday week (higher demand) · ${PER} rows per page`}
         </div>
         <div className="table-wrap">
@@ -427,6 +500,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
               <thead>
                 <tr>
                   <th rowSpan={2}>#</th><th rowSpan={2}>SKU</th><th rowSpan={2}>Line</th><th rowSpan={2}>ABC</th>
+                  <th rowSpan={2} className="num">Cover</th>
                   <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
                   <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
                   <th rowSpan={2} className="num">Total</th>
@@ -452,6 +526,10 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
                       <td className="name">{r.sku_name}</td>
                       <td>{r.prod_line}</td>
                       <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier || "—"}</span></td>
+                      <td className="num" style={{ color: coverColor(r.cover), fontWeight: 600 }}
+                        title={"SOH " + fmt(r.soh) + " ÷ demand " + fmt(r.weekly_demand) + "/wk"}>
+                        {isFinite(r.cover) ? r.cover.toFixed(1) + " wk" : "—"}
+                      </td>
                       {r.alloc.map((v, j) => (
                         <td className="num" key={j} style={v === 0 ? { color: "var(--muted)" } : { fontWeight: 650 }}>
                           {v === 0 ? "—" : fmt(v)}
