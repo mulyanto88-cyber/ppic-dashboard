@@ -18,7 +18,7 @@ const IconShoppingCart = () => <svg width="22" height="22" viewBox="0 0 24 24" f
 const TABS = ["Finished Goods (FG)", "Raw Materials & Packaging (RMPM)"];
 const PER_PAGE = 25;
 
-export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition, productMaster }) {
+export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition, productMaster, skuValue }) {
   const [activeTab, setActiveTab] = useState("Finished Goods (FG)");
   
   // Map productMaster status
@@ -28,6 +28,13 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
     return m;
   }, [productMaster]);
 
+  // Map skuValue prices
+  const priceMap = useMemo(() => {
+    const m = {};
+    for (const p of skuValue || []) m[p.sku_name] = Number(p.avg_price_idr) || 0;
+    return m;
+  }, [skuValue]);
+
   // separate stockPosition FG into Continue and Discontinued
   const fgStocks = useMemo(() => {
     const cont = [];
@@ -36,13 +43,17 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
     for (const r of fgs) {
       const status = fgMasterMap[r.product];
       if (status === "Discontinued") {
-        disc.push(r);
+        disc.push({ ...r, val_est: (Number(r.soh) || 0) * (priceMap[r.product] || 0) });
       } else {
         cont.push(r);
       }
     }
     return { cont, disc };
-  }, [stockPosition, fgMasterMap]);
+  }, [stockPosition, fgMasterMap, priceMap]);
+
+  const discontinuedValue = useMemo(() => {
+    return fgStocks.disc.reduce((s, r) => s + r.val_est, 0);
+  }, [fgStocks.disc]);
 
   // FG states
   const statusOrder = ["Critical", "Below Min", "Healthy", "Overstock"];
@@ -73,8 +84,74 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
       .reduce((s, r) => s + Number(r.soh_value_est || 0), 0);
   }, [inv]);
 
+  // FG Search, Filter & Sort states
+  const [fgSearch, setFgSearch] = useState("");
+  const [fgStatusFilter, setFgStatusFilter] = useState("ALL");
+  const [fgPage, setFgPage] = useState(0);
+  const [fgSortKey, setFgSortKey] = useState("soh_qty");
+  const [fgSortOrder, setFgSortOrder] = useState("desc");
+
+  const fgInventoryList = useMemo(() => {
+    const coverMap = {};
+    for (const c of cover) coverMap[c.sku_name] = c;
+    return inv.map(item => ({
+      ...item,
+      weeks_cover: coverMap[item.sku_name]?.weeks_of_cover,
+      cover_status: coverMap[item.sku_name]?.cover_status || "OK"
+    }));
+  }, [inv, cover]);
+
+  const filteredFg = useMemo(() => {
+    return fgInventoryList.filter((r) => {
+      const nameMatch = (r.sku_name || "").toLowerCase().includes(fgSearch.toLowerCase()) ||
+                        (r.type || "").toLowerCase().includes(fgSearch.toLowerCase());
+      if (!nameMatch) return false;
+      if (fgStatusFilter === "ALL") return true;
+      return r.cover_status === fgStatusFilter;
+    });
+  }, [fgInventoryList, fgSearch, fgStatusFilter]);
+
+  const sortedFg = useMemo(() => {
+    const list = [...filteredFg];
+    list.sort((a, b) => {
+      let valA = a[fgSortKey];
+      let valB = b[fgSortKey];
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return fgSortOrder === "asc" ? 1 : -1;
+      if (valB == null) return fgSortOrder === "asc" ? -1 : 1;
+      const numA = Number(valA);
+      const numB = Number(valB);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return fgSortOrder === "asc" ? numA - numB : numB - numA;
+      }
+      valA = String(valA).toLowerCase();
+      valB = String(valB).toLowerCase();
+      if (valA < valB) return fgSortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return fgSortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+    return list;
+  }, [filteredFg, fgSortKey, fgSortOrder]);
+
+  const fgPages = Math.max(1, Math.ceil(sortedFg.length / PER_PAGE));
+  const curFgPage = Math.min(fgPage, fgPages - 1);
+  const fgPageRows = useMemo(() => {
+    return sortedFg.slice(curFgPage * PER_PAGE, curFgPage * PER_PAGE + PER_PAGE);
+  }, [sortedFg, curFgPage]);
+
+  const handleFgSort = (key) => {
+    if (fgSortKey === key) {
+      setFgSortOrder(fgSortOrder === "asc" ? "desc" : "asc");
+    } else {
+      setFgSortKey(key);
+      setFgSortOrder("desc");
+    }
+    setFgPage(0);
+  };
+
   // RMPM states
   const [rmpmSearch, setRmpmSearch] = useState("");
+  const [showNegativeOnly, setShowNegativeOnly] = useState(false);
   const [rmpmPage, setRmpmPage] = useState(0);
 
   const rmpmList = useMemo(() => {
@@ -82,10 +159,14 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
   }, [stockPosition]);
 
   const filteredRmpm = useMemo(() => {
+    let list = rmpmList;
+    if (showNegativeOnly) {
+      list = list.filter(r => Number(r.soh) < 0);
+    }
     const q = rmpmSearch.toLowerCase().trim();
-    if (!q) return rmpmList;
-    return rmpmList.filter((r) => (r.product || "").toLowerCase().includes(q));
-  }, [rmpmList, rmpmSearch]);
+    if (!q) return list;
+    return list.filter((r) => (r.product || "").toLowerCase().includes(q));
+  }, [rmpmList, rmpmSearch, showNegativeOnly]);
 
   const rmpmKPI = useMemo(() => {
     const activeRmpm = rmpmList.filter(r => Number(r.soh) !== 0 || Number(r.po_incoming) !== 0);
@@ -142,7 +223,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
             <div>
               <b>Cakupan Inventory:</b> Dashboard utama berfokus pada <b>{fmt(fgStocks.cont.length)} SKU Aktif (Continue)</b>. 
               {fgStocks.disc.length > 0 && (
-                <> Terdapat <b>{fmt(fgStocks.disc.length)} SKU Discontinued</b> dengan sisa stok sebanyak <b>{fmt(fgStocks.disc.reduce((s, r) => s + Number(r.soh), 0))} unit</b> yang mengendap di gudang (lihat tabel cuci gudang di bawah).</>
+                <> Terdapat <b>{fmt(fgStocks.disc.length)} SKU Discontinued</b> dengan sisa stok sebanyak <b>{fmt(fgStocks.disc.reduce((s, r) => s + Number(r.soh), 0))} unit</b> dengan taksiran nilai <b>{rp(discontinuedValue)}</b> yang mengendap di gudang (lihat tabel cuci gudang di bawah).</>
               )}
             </div>
           </div>
@@ -274,17 +355,90 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
             </div>
           </div>
 
+          <div className="card" style={{ marginBottom: "1rem" }}>
+            <div className="gloss-filter-row" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+              <h2 className="card-title" style={{ margin: 0 }}>Active FG Stock Inventory & Position ({fmt(filteredFg.length)})</h2>
+              <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center", flex: 1, justifyContent: "flex-end" }}>
+                <div className="search-box" style={{ position: "relative", width: "260px" }}>
+                  <span className="search-icon" style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }}>🔍</span>
+                  <input
+                    type="text"
+                    className="input-search"
+                    placeholder="Search SKU or Type..."
+                    value={fgSearch}
+                    onChange={(e) => { setFgSearch(e.target.value); setFgPage(0); }}
+                    style={{ width: "100%", padding: "6px 10px 6px 35px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: "13px" }}
+                  />
+                </div>
+                <div className="gloss-tabs" style={{ margin: 0 }}>
+                  <button className={"gloss-pill" + (fgStatusFilter === "ALL" ? " active" : "")} onClick={() => { setFgStatusFilter("ALL"); setFgPage(0); }}>All</button>
+                  <button className={"gloss-pill declining" + (fgStatusFilter === "Critical" ? " active" : "")} onClick={() => { setFgStatusFilter("Critical"); setFgPage(0); }}>Critical</button>
+                  <button className={"gloss-pill stable" + (fgStatusFilter === "Below Min" ? " active" : "")} onClick={() => { setFgStatusFilter("Below Min"); setFgPage(0); }}>Below Min</button>
+                  <button className={"gloss-pill growing" + (fgStatusFilter === "Healthy" ? " active" : "")} onClick={() => { setFgStatusFilter("Healthy"); setFgPage(0); }}>Healthy</button>
+                  <button className={"gloss-pill na" + (fgStatusFilter === "Overstock" ? " active" : "")} onClick={() => { setFgStatusFilter("Overstock"); setFgPage(0); }}>Overstock</button>
+                </div>
+              </div>
+            </div>
+            <div className="card-note">List of active finished goods items, their weeks of cover and DOI · click headers to sort</div>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th onClick={() => handleFgSort("sku_name")} style={{ cursor: "pointer", userSelect: "none" }}>SKU{fgSortKey === "sku_name" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th onClick={() => handleFgSort("type")} style={{ cursor: "pointer", userSelect: "none" }}>Type{fgSortKey === "type" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th onClick={() => handleFgSort("abc_tier")} style={{ cursor: "pointer", userSelect: "none" }}>ABC{fgSortKey === "abc_tier" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th className="num" onClick={() => handleFgSort("soh_qty")} style={{ cursor: "pointer", userSelect: "none" }}>SOH (pcs){fgSortKey === "soh_qty" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th className="num" onClick={() => handleFgSort("soh_value_est")} style={{ cursor: "pointer", userSelect: "none" }}>Est. Value{fgSortKey === "soh_value_est" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th className="num" onClick={() => handleFgSort("doi_days")} style={{ cursor: "pointer", userSelect: "none" }}>DOI (days){fgSortKey === "doi_days" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th className="num" onClick={() => handleFgSort("weeks_cover")} style={{ cursor: "pointer", userSelect: "none" }}>Weeks Cover{fgSortKey === "weeks_cover" ? (fgSortOrder === "asc" ? " ▲" : " ▼") : ""}</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fgPageRows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="num" style={{ color: "var(--muted)" }}>{curFgPage * PER_PAGE + i + 1}</td>
+                      <td className="name" style={{ fontWeight: 550 }}>{r.sku_name}</td>
+                      <td>{r.type}</td>
+                      <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier || "—"}</span></td>
+                      <td className="num" style={{ fontWeight: 700 }}>{fmt(r.soh_qty)}</td>
+                      <td className="num">{rp(r.soh_value_est)}</td>
+                      <td className="num">{r.doi_days == null ? "—" : fmt(r.doi_days)}</td>
+                      <td className="num" style={{ fontWeight: 600 }}>{r.weeks_cover == null ? "—" : r.weeks_cover.toFixed(1)}</td>
+                      <td><span className={"badge " + (COVER_BADGE[r.cover_status] || "na")}>{r.cover_status}</span></td>
+                    </tr>
+                  ))}
+                  {filteredFg.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="gloss-empty">No active FG SKUs match search criteria.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {fgPages > 1 && (
+              <div className="pager">
+                <span className="pager-info">{curFgPage * PER_PAGE + 1}–{Math.min(filteredFg.length, curFgPage * PER_PAGE + PER_PAGE)} of {fmt(filteredFg.length)}</span>
+                <button className="gloss-pill" disabled={curFgPage === 0} onClick={() => setFgPage(curFgPage - 1)}>‹ Prev</button>
+                <button className="gloss-pill" disabled={curFgPage === fgPages - 1} onClick={() => setFgPage(curFgPage + 1)}>Next ›</button>
+              </div>
+            )}
+          </div>
+
           {fgStocks.disc.length > 0 && (
             <div className="card">
-              <h2 className="card-title" style={{ color: "var(--amber)" }}>Discontinued FG Stock — Clearance Watchlist</h2>
-              <div className="card-note">SKUs with Discontinued status but still holding physical stock in warehouse</div>
+              <h2 className="card-title" style={{ color: "var(--amber)" }}>Discontinued FG Stock — Clearance Watchlist (Total: {rp(discontinuedValue)})</h2>
+              <div className="card-note">SKUs with Discontinued status but still holding physical stock in warehouse · priced using historical average price</div>
               <div className="table-wrap">
                 <table className="table">
                   <thead>
                     <tr>
                       <th>#</th>
                       <th>Discontinued SKU</th>
-                      <th className="num">Stock on Hand (SOH)</th>
+                      <th className="num">SOH (pcs)</th>
+                      <th className="num">Avg Price</th>
+                      <th className="num">Est. Value (Trapped)</th>
                       <th className="num">PO Incoming</th>
                       <th className="num">MO WIP</th>
                       <th className="num">Total Position</th>
@@ -296,6 +450,8 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                         <td className="num" style={{ color: "var(--muted)" }}>{i + 1}</td>
                         <td className="name" style={{ fontWeight: 550 }}>{r.product}</td>
                         <td className="num" style={{ fontWeight: "700" }}>{fmt(r.soh)}</td>
+                        <td className="num">{rp(priceMap[r.product] || 0)}</td>
+                        <td className="num" style={{ fontWeight: "700", color: "var(--amber)" }}>{rp(r.val_est)}</td>
                         <td className="num">{fmt(r.po_incoming)}</td>
                         <td className="num">{fmt(r.mo_wip)}</td>
                         <td className="num">{fmt(r.total_position)}</td>
@@ -349,15 +505,26 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginBottom: "15px" }}>
               <h2 className="card-title" style={{ margin: 0 }}>Materials Inventory & Position ({fmt(filteredRmpm.length)})</h2>
-              <div style={{ position: "relative", width: "300px" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position: 'absolute', left: '12px', top: '10px', color: 'var(--muted)'}}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                <input
-                  className="gloss-search"
-                  placeholder="Search material/packaging name…"
-                  value={rmpmSearch}
-                  onChange={(e) => { setRmpmSearch(e.target.value); setRmpmPage(0); }}
-                  style={{ padding: "8px 12px 8px 36px", fontSize: "13px", margin: 0 }}
-                />
+              <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer", color: showNegativeOnly ? "var(--red)" : "var(--text-muted)", fontWeight: showNegativeOnly ? "bold" : "normal" }}>
+                  <input
+                    type="checkbox"
+                    checked={showNegativeOnly}
+                    onChange={(e) => { setShowNegativeOnly(e.target.checked); setRmpmPage(0); }}
+                    style={{ cursor: "pointer" }}
+                  />
+                  ⚠ Show Negative Stock Only
+                </label>
+                <div style={{ position: "relative", width: "300px" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position: 'absolute', left: '12px', top: '10px', color: 'var(--muted)'}}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                  <input
+                    className="gloss-search"
+                    placeholder="Search material/packaging name…"
+                    value={rmpmSearch}
+                    onChange={(e) => { setRmpmSearch(e.target.value); setRmpmPage(0); }}
+                    style={{ padding: "8px 12px 8px 36px", fontSize: "13px", margin: 0 }}
+                  />
+                </div>
               </div>
             </div>
             <div className="card-note">Includes raw materials, bottles, cartridges, stickers, boxes and manual books. Items not in FG Master.</div>

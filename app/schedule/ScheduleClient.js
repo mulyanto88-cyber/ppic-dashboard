@@ -474,7 +474,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           <h1 className="page-title">Production Schedule</h1>
           <div className="page-sub">
             {mode === "daily"
-              ? `day-by-day plan · next ${DAILY_WEEKS} weeks · finite-capacity leveling · Mon–Fri 3 shifts · Sat ½ · Sun off · max ${MAX_SKU_PER_LINE_DAY} SKUs/line/day`
+              ? `day-by-day plan · next ${DAILY_WEEKS} weeks · ${strategy === "level" ? "LEVEL (steady daily qty)" : "FRONT-LOAD (urgency)"} · Mon–Fri 3 shifts · Sat ½ · Sun off · max ${MAX_SKU_PER_LINE_DAY} SKUs/line/day`
               : `time-phased weekly plan · next ${HORIZON} weeks · (s,S) policy: reorder at ${REORDER_WEEKS}-wk, up to 30-day · lot ${fmt(LOT)} · payday-aware`}
           </div>
         </div>
@@ -486,6 +486,21 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           onClick={() => { setMode("weekly"); setPage(0); }}>Weekly · {HORIZON} wk</button>
         <button className={"gloss-pill" + (mode === "daily" ? " active" : "")}
           onClick={() => { setMode("daily"); setPage(0); }}>Daily · {DAILY_WEEKS} wk</button>
+        {mode === "daily" && (
+          <>
+            <span style={{ alignSelf: "center", color: "var(--muted)", fontSize: 12, marginLeft: 10 }}>Strategy:</span>
+            <button className={"gloss-pill" + (strategy === "level" ? " active" : "")}
+              onClick={() => { setStrategy("level"); setPage(0); }}
+              title="Heijunka: qty rata & stabil per hari/shift — kapasitas sisa per hari jelas (jendela OEM)">
+              ⚖ Level · steady daily
+            </button>
+            <button className={"gloss-pill" + (strategy === "front" ? " active" : "")}
+              onClick={() => { setStrategy("front"); setPage(0); }}
+              title="Urgensi maksimum: hari paling awal diisi penuh dulu">
+              ⚡ Front-load · urgency
+            </button>
+          </>
+        )}
       </div>
 
       <div className="note-banner">
@@ -497,9 +512,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
             : "Using the 12-week run-rate — publish a forecast baseline to drive this from the official forecast."}
           {" "}
           {mode === "daily"
-            ? "Daily view levels PRODUCTION across working days within capacity — lowest-cover SKUs get the earliest slots; week-1 overflow shifts into week 2." +
+            ? (strategy === "level"
+                ? "LEVEL strategy: production is spread EVENLY across working days — steady qty per day & shift; most-critical SKUs still get the earliest slots; remaining capacity per day = OEM window (card below)."
+                : "FRONT-LOAD strategy: earliest days are filled to capacity first (max urgency); later days stay free.") +
               (hasMatGate
-                ? " Production is also GATED by material (RMPM) on-hand — consignment/daily supplies count as always available."
+                ? " Production is GATED by material (RMPM) on-hand — consignment/daily supplies count as always available."
                 : " Material gate inactive — run migration 0039 (v_bom_matrix) to block production when RMPM is empty.")
             : "Assumes production is available within its week (FG lead ≤ 1 week)."}
         </div>
@@ -649,6 +666,68 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
                           <td className="num" key={i} style={heatStyle(util)}
                             title={fmt(u) + " units" + (capD ? " · " + pct(util) + " of " + fmt(capD) + " (" + numSkus + " SKUs)" : "")}>
                             {u < 1 ? "—" : capD ? pct(util) : fmt(u)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {mode === "daily" && (
+        <div className="card">
+          <h2 className="card-title">Free Capacity — OEM Window</h2>
+          <div className="card-note">
+            remaining units per line per day AFTER the own-product plan · sellable window for OEM / toll manufacturing ·
+            green = whole day idle (best for OEM: full single-run capacity, no changeover) · hover ≈ per-shift
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th rowSpan={2}>Production Line</th>
+                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
+                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                </tr>
+                <tr>
+                  {days.map((d) => <th className="num" key={d.iso}>{d.lbl}{d.shifts === 1.5 ? " ½" : ""}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.filter((L) => getRulesForLine(L) || capMap[L]).map((L) => {
+                  const load = daily.load[L] || Array(days.length).fill(0);
+                  return (
+                    <tr key={L}>
+                      <td className="name">{L}</td>
+                      {days.map((d, i) => {
+                        const numSkus = daily.skusOnDay[L][i].size;
+                        const rules = getRulesForLine(L);
+                        let capD = null;
+                        if (rules) {
+                          const n = Math.min(4, Math.max(1, numSkus || 1));
+                          const target = d.shifts === 1.5 ? rules[n].half : rules[n].full;
+                          capD = 3 * target;
+                        } else if (capMap[L]) {
+                          capD = (capMap[L] * d.shifts) / WEEK_SHIFTS;
+                        }
+                        const freeV = capD == null ? null : Math.max(0, capD - (load[i] || 0));
+                        const idle = (load[i] || 0) < 1;
+                        return (
+                          <td className="num" key={i}
+                            style={
+                              freeV == null || freeV < 1
+                                ? { color: "var(--muted)" }
+                                : idle
+                                ? { color: "var(--green)", fontWeight: 650 }
+                                : {}
+                            }
+                            title={freeV == null ? undefined
+                              : pct(capD ? (freeV / capD) * 100 : 0) + " free · ≈ " + fmt(freeV / 3) + "/shift"}>
+                            {freeV == null ? "—" : freeV < 1 ? "0" : fmt(freeV)}
                           </td>
                         );
                       })}
