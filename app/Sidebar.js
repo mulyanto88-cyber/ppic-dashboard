@@ -8,6 +8,7 @@ const NAV = [
   { href: "/inventory", label: "Inventory Health" },
   { href: "/po-monitoring", label: "PO Monitoring" },
   { href: "/planning", label: "Planning (MPS)" },
+  { href: "/schedule", label: "Prod. Schedule" },
   { href: "/mrp", label: "MRP" },
   { href: "/deep-dive", label: "Deep Dive" },
   { href: "/glossary", label: "Glossary" },
