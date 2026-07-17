@@ -18,9 +18,32 @@ const IconShoppingCart = () => <svg width="22" height="22" viewBox="0 0 24 24" f
 const TABS = ["Finished Goods (FG)", "Raw Materials & Packaging (RMPM)"];
 const PER_PAGE = 25;
 
-export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition }) {
+export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition, productMaster }) {
   const [activeTab, setActiveTab] = useState("Finished Goods (FG)");
   
+  // Map productMaster status
+  const fgMasterMap = useMemo(() => {
+    const m = {};
+    for (const p of productMaster) m[p.sku_name] = p.status;
+    return m;
+  }, [productMaster]);
+
+  // separate stockPosition FG into Continue and Discontinued
+  const fgStocks = useMemo(() => {
+    const cont = [];
+    const disc = [];
+    const fgs = stockPosition.filter(r => r.item_type === "FG" && Number(r.soh) > 0);
+    for (const r of fgs) {
+      const status = fgMasterMap[r.product];
+      if (status === "Discontinued") {
+        disc.push(r);
+      } else {
+        cont.push(r);
+      }
+    }
+    return { cont, disc };
+  }, [stockPosition, fgMasterMap]);
+
   // FG states
   const statusOrder = ["Critical", "Below Min", "Healthy", "Overstock"];
   const statusCount = useMemo(() => {
@@ -66,8 +89,15 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
 
   const rmpmKPI = useMemo(() => {
     const activeRmpm = rmpmList.filter(r => Number(r.soh) !== 0 || Number(r.po_incoming) !== 0);
-    const totalSoh = rmpmList.reduce((s, r) => s + Number(r.soh || 0), 0);
-    const totalPO = rmpmList.reduce((s, r) => s + Number(r.po_incoming || 0), 0);
+    // Convert gram values to kg equivalent for global KPI summing
+    const totalSoh = rmpmList.reduce((s, r) => {
+      const isG = r.uom === "g";
+      return s + (Number(r.soh || 0) / (isG ? 1000 : 1));
+    }, 0);
+    const totalPO = rmpmList.reduce((s, r) => {
+      const isG = r.uom === "g";
+      return s + (Number(r.po_incoming || 0) / (isG ? 1000 : 1));
+    }, 0);
     const negativeCount = rmpmList.filter(r => Number(r.soh) < 0).length;
     return {
       count: activeRmpm.length,
@@ -107,6 +137,16 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
 
       {activeTab === "Finished Goods (FG)" && (
         <>
+          <div className="note-banner">
+            <span className="ic">📊</span>
+            <div>
+              <b>Cakupan Inventory:</b> Dashboard utama berfokus pada <b>{fmt(fgStocks.cont.length)} SKU Aktif (Continue)</b>. 
+              {fgStocks.disc.length > 0 && (
+                <> Terdapat <b>{fmt(fgStocks.disc.length)} SKU Discontinued</b> dengan sisa stok sebanyak <b>{fmt(fgStocks.disc.reduce((s, r) => s + Number(r.soh), 0))} unit</b> yang mengendap di gudang (lihat tabel cuci gudang di bawah).</>
+              )}
+            </div>
+          </div>
+
           <section className="kpi-grid">
             <div className="card kpi-card">
               <div className="kpi-icon accent"><IconDollarSign /></div>
@@ -145,7 +185,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
           <section className="grid-2">
             <div className="card">
               <h2 className="card-title">Weeks-of-Cover Status</h2>
-              <div className="card-note">Critical &lt; 1 wk (lead time) · Below Min &lt; 30 d · Healthy · Overstock</div>
+              <div className="card-note">Critical &lt; 7 d · Below Min &lt; 30 d · Healthy 30–45 d · Overstock &gt; 45 d</div>
               <div className="table-wrap">
                 <table className="table">
                   <thead><tr><th>Status</th><th className="num">SKUs</th></tr></thead>
@@ -233,6 +273,39 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
               </table>
             </div>
           </div>
+
+          {fgStocks.disc.length > 0 && (
+            <div className="card">
+              <h2 className="card-title" style={{ color: "var(--amber)" }}>Discontinued FG Stock — Clearance Watchlist</h2>
+              <div className="card-note">SKUs with Discontinued status but still holding physical stock in warehouse</div>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Discontinued SKU</th>
+                      <th className="num">Stock on Hand (SOH)</th>
+                      <th className="num">PO Incoming</th>
+                      <th className="num">MO WIP</th>
+                      <th className="num">Total Position</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fgStocks.disc.map((r, i) => (
+                      <tr key={i}>
+                        <td className="num" style={{ color: "var(--muted)" }}>{i + 1}</td>
+                        <td className="name" style={{ fontWeight: 550 }}>{r.product}</td>
+                        <td className="num" style={{ fontWeight: "700" }}>{fmt(r.soh)}</td>
+                        <td className="num">{fmt(r.po_incoming)}</td>
+                        <td className="num">{fmt(r.mo_wip)}</td>
+                        <td className="num">{fmt(r.total_position)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -250,16 +323,16 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
             <div className="card kpi-card">
               <div className="kpi-icon green"><IconLayers /></div>
               <div>
-                <div className="kpi-label">Total SOH Qty</div>
-                <div className="kpi-value">{fmt(rmpmKPI.totalSoh)}</div>
+                <div className="kpi-label">Total SOH Qty (KG-equiv)</div>
+                <div className="kpi-value">{fmt(Math.round(rmpmKPI.totalSoh))}</div>
                 <div className="kpi-sub">materials in warehouse</div>
               </div>
             </div>
             <div className="card kpi-card">
               <div className="kpi-icon accent"><IconShoppingCart /></div>
               <div>
-                <div className="kpi-label">PO Pipeline</div>
-                <div className="kpi-value">{fmt(rmpmKPI.totalPO)}</div>
+                <div className="kpi-label">PO Pipeline (KG-equiv)</div>
+                <div className="kpi-value">{fmt(Math.round(rmpmKPI.totalPO))}</div>
                 <div className="kpi-sub">incoming outstanding qty</div>
               </div>
             </div>
@@ -304,6 +377,14 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 <tbody>
                   {rmpmPageRows.map((r, i) => {
                     const isNeg = Number(r.soh) < 0;
+                    const isG = r.uom === "g";
+                    const displayUom = isG ? "kg" : (r.uom || "—");
+                    
+                    const formatVal = (v) => {
+                      const num = Number(v) || 0;
+                      return isG ? (num / 1000).toFixed(1) : fmt(num);
+                    };
+
                     return (
                       <tr key={i} style={isNeg ? { background: "rgba(242,98,111,0.05)" } : undefined}>
                         <td className="num" style={{ color: "var(--muted)" }}>{curRmpmPage * PER_PAGE + i + 1}</td>
@@ -311,13 +392,13 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                           {r.product}
                           {isNeg && <span style={{ marginLeft: "8px", fontSize: "10px", color: "var(--red)", border: "1px solid var(--red)", padding: "1px 5px", borderRadius: "4px", textTransform: "uppercase" }}>Negative</span>}
                         </td>
-                        <td><span className="badge method">{r.uom || "—"}</span></td>
+                        <td><span className="badge method">{displayUom}</span></td>
                         <td className="num" style={{ color: isNeg ? "var(--red)" : "inherit", fontWeight: isNeg ? "700" : "normal" }}>
-                          {fmt(r.soh)}
+                          {formatVal(r.soh)}
                         </td>
-                        <td className="num">{fmt(r.po_incoming)}</td>
-                        <td className="num">{fmt(r.mo_wip)}</td>
-                        <td className="num" style={{ fontWeight: "700" }}>{fmt(r.total_position)}</td>
+                        <td className="num">{formatVal(r.po_incoming)}</td>
+                        <td className="num">{formatVal(r.mo_wip)}</td>
+                        <td className="num" style={{ fontWeight: "700" }}>{formatVal(r.total_position)}</td>
                       </tr>
                     );
                   })}

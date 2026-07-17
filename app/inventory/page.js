@@ -4,7 +4,7 @@ import InventoryClient from "./InventoryClient";
 export const dynamic = "force-dynamic";
 
 export default async function InventoryHealth() {
-  let kpi = {}, byMove = [], cover = [], inv = [], stockPosition = [];
+  let kpi = {}, byMove = [], cover = [], inv = [], stockPosition = [], productMaster = [];
   
   const results = await Promise.allSettled([
     sb("v_kpi_inventory_value?select=*"),
@@ -12,6 +12,7 @@ export default async function InventoryHealth() {
     sb("v_mps_cover?select=*&order=weeks_of_cover.asc"),
     sb("v_inventory_fg?select=*&order=soh_value_est.desc"),
     sb("v_stock_position?select=*&order=total_position.desc"),
+    sb("product_master?select=sku_name,status"),
   ]);
 
   const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
@@ -20,6 +21,7 @@ export default async function InventoryHealth() {
   cover = getVal(results[2]);
   inv = getVal(results[3]);
   stockPosition = getVal(results[4]);
+  productMaster = getVal(results[5]);
 
   const hasData = results.some(r => r.status === "fulfilled");
   if (!hasData) {
@@ -39,6 +41,7 @@ export default async function InventoryHealth() {
       cover={cover}
       inv={inv}
       stockPosition={stockPosition}
+      productMaster={productMaster}
     />
   );
 }
