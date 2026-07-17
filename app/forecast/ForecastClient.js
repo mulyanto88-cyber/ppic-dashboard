@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fmt, ym, pct } from "../../lib/format";
 import {
-  METHODS, METHOD_KEYS, groupSeries, backtest, predictions, champion, forecastForward,
+  METHODS, METHOD_KEYS, seriesFromMatrix, backtest, predictions, champion, forecastForward,
 } from "../../lib/forecast";
 
 const TABS = ["Overview", "Accuracy", "Model Lab"];
@@ -13,8 +13,8 @@ const METHOD_COLORS = {
 };
 
 // ---- compute every SKU's models once (memoized in parent) --------------------
-function computeModel(seriesRows) {
-  const map = groupSeries(seriesRows);
+function computeModel(matrixRows) {
+  const map = seriesFromMatrix(matrixRows);
   const skus = {};
   let months = [];
   for (const sku in map) {
@@ -61,9 +61,9 @@ function exportCSV(list, months, segMap, valMap) {
   URL.revokeObjectURL(url);
 }
 
-export default function ForecastClient({ series, seg, val, meta }) {
+export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null }) {
   const [tab, setTab] = useState("Overview");
-  const { skus, months } = useMemo(() => computeModel(series), [series]);
+  const { skus, months } = useMemo(() => computeModel(matrix), [matrix]);
   const segMap = useMemo(() => {
     const m = {}; for (const r of seg) m[r.sku_name] = r; return m;
   }, [seg]);
@@ -96,7 +96,10 @@ export default function ForecastClient({ series, seg, val, meta }) {
       </div>
 
       {tab === "Overview" && <Overview skus={skus} months={months} segMap={segMap} ranked={ranked} meta={meta} />}
-      {tab === "Accuracy" && <Accuracy skus={skus} segMap={segMap} ranked={ranked} />}
+      {tab === "Accuracy" && (
+        <Accuracy skus={skus} segMap={segMap} ranked={ranked} months={months}
+          meta={meta} live={live} liveDetail={liveDetail} liveErr={liveErr} />
+      )}
       {tab === "Model Lab" && <ModelLab skus={skus} months={months} segMap={segMap} ranked={ranked} />}
     </>
   );
@@ -164,7 +167,13 @@ function Overview({ skus, months, segMap, ranked, meta }) {
   for (const x of list) mix[x.champ.method] = (mix[x.champ.method] || 0) + 1;
   const topMethod = Object.entries(mix).sort((a, b) => b[1] - a[1])[0] || ["wma", 0];
 
-  const top = ranked.slice(0, 25);
+  // SEMUA SKU Continue yang punya forecast: urutan revenue, plus sisanya by volume
+  const inRanked = new Set(ranked.map((v) => v.sku_name));
+  const extras = list
+    .filter((x) => !inRanked.has(x.name))
+    .sort((a, b) => b.total12 - a.total12)
+    .map((x) => ({ sku_name: x.name, abc_tier_value: null }));
+  const rows = [...ranked, ...extras];
   const maxBar = Math.max(1, ...totalByMonth.map((d) => d.total));
 
   return (
@@ -209,8 +218,8 @@ function Overview({ skus, months, segMap, ranked, meta }) {
       </div>
 
       <div className="card">
-        <h2 className="card-title">Forecast by SKU — Top 25 (by revenue)</h2>
-        <div className="card-note">each SKU forecast with its champion model · accuracy = 100 − backtest wMAPE</div>
+        <h2 className="card-title">Forecast by SKU — All Active SKUs ({fmt(rows.length)})</h2>
+        <div className="card-note">every Continue SKU with sales history · sorted by revenue · champion model each · accuracy = 100 − backtest wMAPE</div>
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -221,7 +230,7 @@ function Overview({ skus, months, segMap, ranked, meta }) {
               </tr>
             </thead>
             <tbody>
-              {top.map((v, i) => {
+              {rows.map((v, i) => {
                 const x = skus[v.sku_name];
                 const sg = segMap[v.sku_name] || {};
                 const acc = x.champ.wmape === null ? null : 100 - x.champ.wmape;
@@ -245,8 +254,112 @@ function Overview({ skus, months, segMap, ranked, meta }) {
   );
 }
 
+// ============================ LIVE PERFORMANCE ================================
+const BAND_STYLE = {
+  Under:    { background: "var(--accent-soft)", color: "var(--accent)" },
+  Accurate: { background: "var(--green-soft)",  color: "var(--green)" },
+  Over:     { background: "var(--amber-soft)",  color: "var(--amber)" },
+};
+const biasColor = (b) =>
+  b == null ? {} : { color: Math.abs(b) <= 10 ? "var(--green)" : Math.abs(b) <= 25 ? "var(--amber)" : "var(--red)" };
+
+function LivePerformance({ live, liveDetail, liveErr, meta, months }) {
+  const latestMonth = liveDetail.length ? liveDetail[0].forecast_month : null;
+  const misses = latestMonth
+    ? liveDetail.filter((r) => r.forecast_month === latestMonth).slice(0, 10)
+    : [];
+
+  return (
+    <>
+      <div className="card">
+        <h2 className="card-title">Live Performance — published vs actual</h2>
+        <div className="card-note">
+          real accuracy of locked baselines · a month is scored automatically once it completes ·
+          uses the last baseline published before the month began
+        </div>
+        {live.length ? (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Month</th><th>Baseline run</th><th className="num">SKUs</th>
+                  <th className="num">Forecast</th><th className="num">Actual</th>
+                  <th className="num">Accuracy</th><th className="num">Bias</th>
+                  <th className="num">Under / Acc / Over</th>
+                </tr>
+              </thead>
+              <tbody>
+                {live.map((r, i) => (
+                  <tr key={i}>
+                    <td className="name">{ym(r.forecast_month)}</td>
+                    <td>{r.run_date}</td>
+                    <td className="num">{fmt(r.skus)}</td>
+                    <td className="num">{fmt(r.forecast_total)}</td>
+                    <td className="num">{fmt(r.actual_total)}</td>
+                    <td className="num" style={accColor(r.accuracy_pct == null ? null : Number(r.accuracy_pct))}>
+                      {r.accuracy_pct == null ? "—" : pct(r.accuracy_pct)}
+                    </td>
+                    <td className="num" style={biasColor(r.bias_pct == null ? null : Number(r.bias_pct))}>
+                      {r.bias_pct == null ? "—" : (Number(r.bias_pct) > 0 ? "+" : "") + pct(r.bias_pct)}
+                    </td>
+                    <td className="num">
+                      <span style={{ color: "var(--accent)" }}>{fmt(r.under_count)}</span>
+                      {" / "}
+                      <span style={{ color: "var(--green)" }}>{fmt(r.accurate_count)}</span>
+                      {" / "}
+                      <span style={{ color: "var(--amber)" }}>{fmt(r.over_count)}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="gloss-empty">
+            {liveErr
+              ? "Live tracking not active yet — run migration 0029 (v_forecast_vs_actual) in Supabase."
+              : meta && meta.run_date
+              ? `Baseline published ${meta.run_date} — the first live score lands automatically once ${months[0] ? ym(months[0]) : "the first forecast month"} completes. Nothing to do.`
+              : "No baseline published yet — publish one in Overview. Live tracking starts after its first forecast month completes."}
+          </div>
+        )}
+      </div>
+
+      {misses.length > 0 && (
+        <div className="card">
+          <h2 className="card-title">Biggest Misses — {ym(latestMonth)}</h2>
+          <div className="card-note">largest absolute errors in the latest scored month · use these to challenge the model or the plan</div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>SKU</th><th>Model</th><th className="num">Forecast</th><th className="num">Actual</th>
+                  <th className="num">Error</th><th className="num">APE</th><th>Band</th>
+                </tr>
+              </thead>
+              <tbody>
+                {misses.map((r, i) => (
+                  <tr key={i}>
+                    <td className="name">{r.sku_name}</td>
+                    <td><span className="badge method">{r.method}</span></td>
+                    <td className="num">{fmt(r.forecast_qty)}</td>
+                    <td className="num">{fmt(r.actual_qty)}</td>
+                    <td className="num">{(Number(r.error_qty) > 0 ? "+" : "") + fmt(r.error_qty)}</td>
+                    <td className="num">{r.ape_pct == null ? "—" : pct(r.ape_pct)}</td>
+                    <td><span className="badge" style={BAND_STYLE[r.band] || {}}>{r.band}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ============================ ACCURACY =======================================
-function Accuracy({ skus, segMap, ranked }) {
+function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = [], liveErr = null }) {
   const list = Object.values(skus);
 
   const methodAgg = useMemo(() => METHOD_KEYS.map((m) => {
@@ -272,16 +385,33 @@ function Accuracy({ skus, segMap, ranked }) {
     return { under, acc, over, t };
   }, [skus]);
 
-  const top = ranked.slice(0, 25);
+  const inRanked = new Set(ranked.map((v) => v.sku_name));
+  const rows = [
+    ...ranked,
+    ...list.filter((x) => !inRanked.has(x.name))
+      .sort((a, b) => b.total12 - a.total12)
+      .map((x) => ({ sku_name: x.name, abc_tier_value: null })),
+  ];
 
   return (
     <>
+      <LivePerformance live={live} liveDetail={liveDetail} liveErr={liveErr} meta={meta} months={months} />
+
       <div className="note-banner">
         <span className="ic">ℹ️</span>
         <div>
-          <b>Backtest-based accuracy.</b> Numbers below come from a 1-step-ahead rolling backtest on
-          historical sales (what each method <i>would</i> have scored). Live forecast-vs-actual performance
-          tracking begins once we start logging each month's published forecast — no prior forecasts exist yet.
+          {live.length ? (
+            <>
+              <b>Method stats below are backtest-based.</b> They rank methods on history (what each{" "}
+              <i>would</i> have scored). Real published-vs-actual performance is in the Live Performance card above.
+            </>
+          ) : (
+            <>
+              <b>Backtest-based accuracy.</b> Numbers below come from a 1-step-ahead rolling backtest on
+              historical sales (what each method <i>would</i> have scored). Live published-vs-actual tracking
+              fills the card above automatically once a baseline&apos;s forecast month completes.
+            </>
+          )}
         </div>
       </div>
 
@@ -341,7 +471,7 @@ function Accuracy({ skus, segMap, ranked }) {
       </div>
 
       <div className="card">
-        <h2 className="card-title">Accuracy by SKU — Top 25 (by revenue)</h2>
+        <h2 className="card-title">Accuracy by SKU — All Active SKUs ({fmt(rows.length)})</h2>
         <div className="card-note">per-SKU champion backtest · sorted by revenue</div>
         <div className="table-wrap">
           <table className="table">
@@ -349,7 +479,7 @@ function Accuracy({ skus, segMap, ranked }) {
               <tr><th>SKU</th><th>ABC</th><th>XYZ</th><th>Champion</th><th className="num">wMAPE</th><th className="num">Accuracy</th></tr>
             </thead>
             <tbody>
-              {top.map((v, i) => {
+              {rows.map((v, i) => {
                 const x = skus[v.sku_name];
                 const sg = segMap[v.sku_name] || {};
                 const acc = x.champ.wmape === null ? null : 100 - x.champ.wmape;

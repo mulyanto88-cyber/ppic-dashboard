@@ -1,5 +1,5 @@
 import { sb, sbWrite } from "../../../../lib/supabase";
-import { groupSeries, champion, forecastForward, METHODS } from "../../../../lib/forecast";
+import { seriesFromMatrix, champion, forecastForward, METHODS } from "../../../../lib/forecast";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +8,9 @@ export const dynamic = "force-dynamic";
 // Re-publish di hari yang sama menimpa run itu.
 export async function POST() {
   try {
-    const rows = await sb("v_sku_monthly_series?select=sku_name,month,qty");
-    const map = groupSeries(rows);
+    // matrix = 1 baris/SKU (hindari limit 1000 baris PostgREST pada deret flat)
+    const rows = await sb("v_sku_monthly_matrix?select=sku_name,start_month,qtys");
+    const map = seriesFromMatrix(rows);
     const runDate = new Date().toISOString().slice(0, 10);
 
     const out = [];
