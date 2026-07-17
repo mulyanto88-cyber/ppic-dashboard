@@ -49,6 +49,7 @@ export default async function DeepDive({ searchParams }) {
         sb(`sales_monthly?select=month,qty_delivered&sku_name=ilike.${enc}&order=month.asc`),
         sb(`bom?select=component,per_pcs&product=ilike.${enc}&order=component.asc`),
         sb(`v_mrp?select=component,uom,weeks_cover,status`),
+        sb(`v_stock_position?select=product,uom,soh,po_incoming`),
       ]);
       const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
       const seg = getVal(results[0]);
@@ -58,16 +59,28 @@ export default async function DeepDive({ searchParams }) {
       const sales = getVal(results[4]);
       const bom = getVal(results[5]);
       const mrp = getVal(results[6]);
+      const stock = getVal(results[7]);
 
       const matMap = {};
       for (const m of mrp) matMap[(m.component || "").toUpperCase().trim()] = m;
+      
+      const stockMap = {};
+      for (const s of stock) stockMap[(s.product || "").toUpperCase().trim()] = s;
+
       detail = {
         seg: seg[0] || {},
         val: val[0] || {},
         inv: inv[0] || {},
         fc: fc,
         sales: sales.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) })),
-        bom: bom.map((b) => ({ ...b, mat: matMap[(b.component || "").toUpperCase().trim()] || {} })),
+        bom: bom.map((b) => {
+          const key = (b.component || "").toUpperCase().trim();
+          return {
+            ...b,
+            mat: matMap[key] || {},
+            stock: stockMap[key] || {},
+          };
+        }),
       };
     } catch (e) {
       error = e.message;
@@ -166,22 +179,47 @@ export default async function DeepDive({ searchParams }) {
 
           <div className="card">
             <h2 className="card-title">Bill of Materials</h2>
-            <div className="card-note">components per unit · material coverage from MRP</div>
+            <div className="card-note">components per unit · material stock & coverage from warehouse</div>
             <div className="table-wrap">
               <table className="table">
                 <thead>
-                  <tr><th>Component</th><th className="num">Per Unit</th><th className="num">Wks Cover</th><th>Material Status</th></tr>
+                  <tr>
+                    <th>Component</th>
+                    <th className="num">Per Unit</th>
+                    <th>Satuan</th>
+                    <th className="num">Stock on Hand (SOH)</th>
+                    <th className="num">PO Incoming</th>
+                    <th className="num">Wks Cover</th>
+                    <th>Material Status</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {detail.bom.map((b, i) => (
-                    <tr key={i}>
-                      <td className="name">{b.component}</td>
-                      <td className="num">{b.per_pcs}{b.mat.uom ? " " + b.mat.uom : ""}</td>
-                      <td className="num">{b.mat.weeks_cover == null ? "—" : b.mat.weeks_cover}</td>
-                      <td>{b.mat.status ? <span className={"badge " + (MAT_BADGE[b.mat.status] || "na")}>{b.mat.status}</span> : "—"}</td>
-                    </tr>
-                  ))}
-                  {detail.bom.length === 0 && <tr><td colSpan={4} style={{ color: "var(--muted)" }}>No BOM found for this SKU.</td></tr>}
+                  {detail.bom.map((b, i) => {
+                    const isG = (b.mat.uom || b.stock.uom) === "g";
+                    const displayUom = isG ? "kg" : (b.mat.uom || b.stock.uom || "—");
+                    
+                    const formatVal = (v) => {
+                      if (v == null) return "—";
+                      const num = Number(v) || 0;
+                      return isG ? (num / 1000).toFixed(1) : fmt(num);
+                    };
+
+                    const rawSoh = b.stock.soh ?? b.mat.soh;
+                    const rawPO = b.stock.po_incoming ?? b.mat.po_incoming;
+
+                    return (
+                      <tr key={i}>
+                        <td className="name">{b.component}</td>
+                        <td className="num">{b.per_pcs}</td>
+                        <td><span className="badge method">{isG ? "g" : displayUom}</span></td>
+                        <td className="num">{formatVal(rawSoh)}</td>
+                        <td className="num">{formatVal(rawPO)}</td>
+                        <td className="num">{b.mat.weeks_cover == null ? "—" : b.mat.weeks_cover}</td>
+                        <td>{b.mat.status ? <span className={"badge " + (MAT_BADGE[b.mat.status] || "na")}>{b.mat.status}</span> : <span className="badge na">No Demand</span>}</td>
+                      </tr>
+                    );
+                  })}
+                  {detail.bom.length === 0 && <tr><td colSpan={7} style={{ color: "var(--muted)" }}>No BOM found for this SKU.</td></tr>}
                 </tbody>
               </table>
             </div>
