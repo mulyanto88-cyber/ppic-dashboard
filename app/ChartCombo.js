@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { fmt, rp } from "../lib/format";
+import { fmt, rp, fmtC } from "../lib/format";
 
 // Combo: revenue bars + units line, dengan hover tooltip (angka pasti).
 export default function ChartCombo({ data }) {
@@ -29,6 +29,13 @@ export default function ChartCombo({ data }) {
         })}
         <path d={path} style={{ fill: "none", stroke: "var(--green)", strokeWidth: 2 }} />
         {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={hi === i ? 4 : 2.6} style={{ fill: "var(--green)" }} />)}
+        {/* Qty label langsung di atas titik garis */}
+        {pts.map((p, i) => (
+          <text key={"q" + i} x={p[0]} y={p[1] - 7}
+            style={{ fontSize: 8.5, fill: "var(--green)", fontWeight: 600 }} textAnchor="middle">
+            {fmtC(data[i].qty)}
+          </text>
+        ))}
         {data.map((d, i) =>
           n <= 12 || i % 2 === 0 ? (
             <text key={i} x={padX + slot * i + slot / 2} y={H - 8}

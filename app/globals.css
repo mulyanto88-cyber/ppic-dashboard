@@ -84,6 +84,7 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--line); background: var(--panel);
   padding: 8px 13px; border-radius: var(--radius-sm); white-space: nowrap;
   transition: border-color .15s, color .15s, background .15s;
+  font-family: inherit; cursor: pointer;
 }
 .btn-export:hover { border-color: var(--accent); color: #fff; background: var(--panel-2); }
 
@@ -199,9 +200,31 @@ a { color: inherit; text-decoration: none; }
 
 /* ===================== Deep Dive ===================== */
 .sku-matches { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
-.sku-match { padding: 9px 11px; border-radius: 8px; color: var(--text); font-size: 13px; transition: background .12s; }
+.sku-match { padding: 9px 11px; border-radius: 8px; color: var(--text); font-size: 13px; transition: background .12s; cursor: pointer; }
 .sku-match:hover { background: var(--panel-2); }
 .dd-badges { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+
+/* ===================== Forecast ===================== */
+.note-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--accent-soft); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 11px 14px;
+  font-size: 12.5px; color: var(--text-dim); margin-bottom: 18px;
+}
+.note-banner b { color: var(--text); }
+.note-banner .ic { flex-shrink: 0; }
+.badge.method { background: var(--panel-2); color: var(--text-dim); }
+.badge.champ { background: var(--accent-soft); color: var(--accent); }
+.fc-legend { display: flex; gap: 15px; flex-wrap: wrap; margin-top: 13px; font-size: 12px; color: var(--muted); }
+.fc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.fc-legend i { width: 15px; border-top: 3px solid currentColor; display: inline-block; border-radius: 2px; }
+.fc-legend i.dash { border-top-style: dashed; }
+.bias-bar { display: flex; height: 26px; border-radius: 7px; overflow: hidden; border: 1px solid var(--line); }
+.bias-bar > div { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; min-width: 0; }
+.bias-under { background: var(--accent); }
+.bias-acc { background: var(--green); }
+.bias-over { background: var(--amber); }
+.pick-active { background: var(--accent-soft) !important; color: var(--accent); }
 
 /* ===================== Responsive ===================== */
 @media (max-width: 900px) {

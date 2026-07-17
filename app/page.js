@@ -1,6 +1,7 @@
 import { sb } from "../lib/supabase";
 import { fmt, rp, ym, dmon, pct } from "../lib/format";
 import ChartCombo from "./ChartCombo";
+import WeeklyBars from "./WeeklyBars";
 
 export const dynamic = "force-dynamic";
 
@@ -61,11 +62,9 @@ export default async function DemandAnalytics() {
 
   const topValue = skuValue.slice(0, 12);
   const rev18 = revenue.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) }));
-  const wk12 = weekly.map((r) => ({ ...r, _lbl: dmon(r.week_start) }));
 
-  // 3 recent month labels (untuk header kolom Top 12): [m2, m1, m0]
-  const last3 = revenue.slice(-3).map((r) => ym(r.month));
-  const wkNote = weekly.length ? `ISO weeks W${weekly[0].iso_week}–W${weekly[weekly.length - 1].iso_week} · label = week start date` : "";
+  // 4 recent month labels (untuk header kolom Top 12): [m3, m2, m1, m0]
+  const last4 = revenue.slice(-4).map((r) => ym(r.month));
 
   // totals untuk %
   const movSku = movement.reduce((s, m) => s + Number(m.sku_count || 0), 0);
@@ -98,8 +97,8 @@ export default async function DemandAnalytics() {
 
       <div className="card">
         <h2 className="card-title">Weekly Pattern</h2>
-        <div className="card-note">last 12 weeks · units delivered (FG) · {wkNote}</div>
-        <BarChart data={wk12} valueKey="qty" labelKey="_lbl" showVal />
+        <div className="card-note">last 12 weeks · units delivered (FG) · label = week start · hover for ISO week &amp; date range</div>
+        <WeeklyBars data={weekly} />
       </div>
 
       <section className="grid-2">
@@ -148,16 +147,19 @@ export default async function DemandAnalytics() {
 
       <div className="card">
         <h2 className="card-title">Top 12 SKUs — Revenue Contribution</h2>
-        <div className="card-note">ranked by 12-month value · monthly sales (last 3 months) · Avg/mo = 12-week run-rate → monthly</div>
+        <div className="card-note">
+          ranked by 12-month value · monthly sales (last 4 months) · <b>{last4[3] || "current"}* = partial month</b> · Avg/mo = 12-week run-rate → monthly
+        </div>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>SKU</th>
                 <th className="num">Revenue</th>
-                <th className="num">{last3[0] || "M-2"}</th>
-                <th className="num">{last3[1] || "M-1"}</th>
-                <th className="num">{last3[2] || "M-0"}</th>
+                <th className="num">{last4[0] || "M-3"}</th>
+                <th className="num">{last4[1] || "M-2"}</th>
+                <th className="num">{last4[2] || "M-1"}</th>
+                <th className="num">{last4[3] ? last4[3] + "*" : "M-0"}</th>
                 <th className="num">Avg/mo</th>
                 <th>ABC-val</th>
                 <th>XYZ</th>
@@ -168,20 +170,14 @@ export default async function DemandAnalytics() {
               {topValue.map((r, k) => {
                 const s = segMap[r.sku_name] || {};
                 const rc = recentMap[r.sku_name] || {};
-                const up = Number(rc.m0_qty) > Number(rc.m1_qty);
-                const dn = Number(rc.m0_qty) < Number(rc.m1_qty);
                 return (
                   <tr key={k}>
                     <td className="name">{r.sku_name}</td>
                     <td className="num">{rp(r.value_12m)}</td>
+                    <td className="num">{fmt(rc.m3_qty)}</td>
                     <td className="num">{fmt(rc.m2_qty)}</td>
                     <td className="num">{fmt(rc.m1_qty)}</td>
-                    <td className="num">
-                      {fmt(rc.m0_qty)}{" "}
-                      {rc.m0_qty != null && (up || dn) && (
-                        <span style={{ color: up ? "var(--green)" : "var(--red)", fontSize: 10 }}>{up ? "▲" : "▼"}</span>
-                      )}
-                    </td>
+                    <td className="num">{fmt(rc.m0_qty)}</td>
                     <td className="num">{fmt(rc.avg_monthly_l3m)}</td>
                     <td><span className={"badge abc-" + String(r.abc_tier_value || "").toLowerCase()}>{r.abc_tier_value}</span></td>
                     <td>{s.xyz_class ? <span className={"badge xyz-" + String(s.xyz_class).toLowerCase()}>{s.xyz_class}</span> : "—"}</td>
