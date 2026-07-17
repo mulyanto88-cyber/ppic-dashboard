@@ -1,5 +1,6 @@
 "use client";
 import { usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 
 const NAV = [
   { href: "/", label: "Demand Analytics" },
@@ -14,6 +15,23 @@ const NAV = [
 
 export default function Sidebar() {
   const path = usePathname();
+  const [theme, setTheme] = useState("dark");
+
+  useEffect(() => {
+    setTheme(document.documentElement.getAttribute("data-theme") || "dark");
+  }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("ppic-theme", next);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   return (
     <header className="navbar">
       <div className="brand">
@@ -34,6 +52,14 @@ export default function Sidebar() {
           );
         })}
       </nav>
+      <button
+        className="theme-toggle"
+        onClick={toggleTheme}
+        title="Toggle light / dark"
+        aria-label="Toggle theme"
+      >
+        {theme === "dark" ? "☀" : "🌙"}
+      </button>
       <div className="sidebar-foot">PT FOOM Lab Global</div>
     </header>
   );
