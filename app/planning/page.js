@@ -46,6 +46,11 @@ export default async function Planning() {
   const needCount = plan.filter((r) => Number(r.net_requirement) > 0).length;
   const overLines = cap.filter((r) => r.status === "Over capacity").length;
 
+  const srcCounts = {};
+  for (const r of plan) srcCounts[r.demand_source] = (srcCounts[r.demand_source] || 0) + 1;
+  const dominant = Object.entries(srcCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const usingForecast = dominant === "Forecast baseline";
+
   return (
     <>
       <div className="page-head">
@@ -56,6 +61,16 @@ export default async function Planning() {
           </div>
         </div>
         <a className="btn-export" href="/api/export?view=v_mps_plan">↓ Export CSV</a>
+      </div>
+
+      <div className="note-banner">
+        <span className="ic">{usingForecast ? "🎯" : "📊"}</span>
+        <div>
+          <b>Demand source: {dominant || "—"}.</b>{" "}
+          {usingForecast
+            ? "MPS is driven by the published forecast baseline (monthly ÷ 4.345 = weekly rate)."
+            : "No forecast baseline published yet — MPS uses the 12-week sales run-rate. Publish a baseline in the Forecast tab to switch."}
+        </div>
       </div>
 
       <section className="kpi-grid">
@@ -83,7 +98,7 @@ export default async function Planning() {
 
       <div className="card">
         <h2 className="card-title">Line Capacity Utilization</h2>
-        <div className="card-note">weekly demand (12-wk run-rate) vs weekly capacity per production line</div>
+        <div className="card-note">weekly demand vs weekly capacity per production line</div>
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -127,6 +142,7 @@ export default async function Planning() {
                 <th className="num">Weeks Cover</th>
                 <th className="num">Target (30d)</th>
                 <th className="num">Net Requirement</th>
+                <th>Demand</th>
               </tr>
             </thead>
             <tbody>
@@ -142,6 +158,7 @@ export default async function Planning() {
                   </td>
                   <td className="num">{fmt(r.target_stock_30d)}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{fmt(r.net_requirement)}</td>
+                  <td><span className={"badge " + (r.demand_source === "Forecast baseline" ? "growing" : "")}>{r.demand_source === "Forecast baseline" ? "Forecast" : "Run-rate"}</span></td>
                 </tr>
               ))}
             </tbody>

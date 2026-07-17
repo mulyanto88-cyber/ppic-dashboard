@@ -4,14 +4,15 @@ import ForecastClient from "./ForecastClient";
 export const dynamic = "force-dynamic";
 
 export default async function Forecast() {
-  let series = [], seg = [], val = [], error = null;
+  let series = [], seg = [], val = [], meta = null, error = null;
   try {
-    const [a, b, c] = await Promise.all([
+    const [a, b, c, d] = await Promise.all([
       sb("v_sku_monthly_series?select=sku_name,month,qty"),
       sb("v_sku_segmentation?select=sku_name,type,abc_tier,xyz_class,trend,qty_12m"),
       sb("v_sku_value?select=sku_name,value_12m,abc_tier_value&order=value_12m.desc"),
+      sb("v_forecast_baseline_meta?select=*"),
     ]);
-    series = a || []; seg = b || []; val = c || [];
+    series = a || []; seg = b || []; val = c || []; meta = (d && d[0]) || null;
   } catch (e) {
     error = e.message;
   }
@@ -26,5 +27,5 @@ export default async function Forecast() {
     );
   }
 
-  return <ForecastClient series={series} seg={seg} val={val} />;
+  return <ForecastClient series={series} seg={seg} val={val} meta={meta} />;
 }

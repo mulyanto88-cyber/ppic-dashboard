@@ -23,6 +23,7 @@ const TERMS = [
   { group: "Forecast", term: "MAPE", tag: "error", def: "Mean Absolute Percentage Error — average of |forecast − actual| ÷ actual. Simple MAPE is distorted by tiny SKUs, so we rely on wMAPE." },
   { group: "Forecast", term: "wMAPE (volume-weighted)", tag: "KPI", def: "Volume-weighted MAPE — the reliable accuracy metric, weighting SKUs by how much they matter. Forecast Accuracy = 100 − wMAPE. Target ≥ 80%.", formula: "Forecast Accuracy = 100 − wMAPE" },
   { group: "Forecast", term: "Backtest", tag: "validation", def: "Tests a method on past months where the actual is already known — a 1-step-ahead rolling holdout — to judge accuracy objectively rather than by eye. Basis for picking each SKU's champion.", formula: "at each month t: forecast from months 0..t-1, compare to actual t" },
+  { group: "Forecast", term: "Forecast Baseline (published)", tag: "official", def: "A dated snapshot of the champion forecast, locked via the Publish button. It becomes the single official demand figure feeding MPS & MRP, and the reference against which next month's actuals are scored for live accuracy. Re-publishing the same day overwrites that run; a new day is a new run.", formula: "run_date · forecast_month · SKU · qty · method" },
 
   // ---------- Inventory Health ----------
   { group: "Inventory", term: "SOH — Stock on Hand", def: "Physical units available in stock (finished-goods warehouses)." },
@@ -33,6 +34,7 @@ const TERMS = [
   { group: "Inventory", term: "Inventory Value (est.)", def: "Estimated value = SOH × average sales price. It is a retail-value estimate; will be replaced by cost/HPP when available." },
 
   // ---------- Planning & MRP ----------
+  { group: "Planning & MRP", term: "Demand Source", tag: "MPS/MRP input", def: "Where planning demand comes from. When a forecast baseline is published, MPS & MRP use it (monthly baseline ÷ 4.345 = weekly rate); otherwise they fall back to the 12-week sales run-rate. Shown per SKU in the MPS table.", formula: "weekly demand = avg(baseline horizon months) ÷ 4.345" },
   { group: "Planning & MRP", term: "Net Requirement", tag: "MRP", def: "What actually needs to be produced or ordered.", formula: "Net = SOH + incoming (open PO) + WIP − demand" },
   { group: "Planning & MRP", term: "MPS — Master Production Schedule", def: "The weekly finished-goods production plan derived from demand vs stock." },
   { group: "Planning & MRP", term: "MRP — Material Requirements Planning", def: "Explodes FG demand through the BOM into raw-material & packaging requirements, then into purchase orders." },

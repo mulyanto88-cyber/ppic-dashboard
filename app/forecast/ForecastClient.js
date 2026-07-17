@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { fmt, ym, pct } from "../../lib/format";
 import {
   METHODS, METHOD_KEYS, groupSeries, backtest, predictions, champion, forecastForward,
@@ -40,28 +41,36 @@ function csvCell(v) {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-function exportCSV(list, months) {
-  const head = ["SKU", "Champion", "Accuracy_%", ...months.map(ym)];
+function exportCSV(list, months, segMap, valMap) {
+  const head = ["SKU", "Type", "ABC (value)", "XYZ", "Trend", "Champion Model", "Accuracy_%",
+    ...months.map(ym), "Total 3-mo"];
   const rows = [...list].sort((a, b) => b.total12 - a.total12).map((x) => {
+    const sg = segMap[x.name] || {};
     const acc = x.champ.wmape === null ? "" : (100 - x.champ.wmape).toFixed(1);
     const f = x.fwd[x.champ.method];
-    return [x.name, METHODS[x.champ.method].label, acc, ...f.map((p) => p.q)];
+    const tot3 = f.reduce((s, p) => s + p.q, 0);
+    return [x.name, sg.type || "", valMap[x.name] || "", sg.xyz_class || "", sg.trend || "",
+      METHODS[x.champ.method].label, acc, ...f.map((p) => p.q), tot3];
   });
   const csv = "﻿" + [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
+  const stamp = new Date().toISOString().slice(0, 10);
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const a = document.createElement("a");
-  a.href = url; a.download = "forecast_champion.csv";
+  a.href = url; a.download = `forecast_all_sku_${stamp}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
 
-export default function ForecastClient({ series, seg, val }) {
+export default function ForecastClient({ series, seg, val, meta }) {
   const [tab, setTab] = useState("Overview");
   const { skus, months } = useMemo(() => computeModel(series), [series]);
   const segMap = useMemo(() => {
     const m = {}; for (const r of seg) m[r.sku_name] = r; return m;
   }, [seg]);
   const ranked = useMemo(() => val.filter((v) => skus[v.sku_name]), [val, skus]);
+  const valMap = useMemo(() => {
+    const m = {}; for (const v of val) m[v.sku_name] = v.abc_tier_value; return m;
+  }, [val]);
 
   return (
     <>
@@ -73,8 +82,8 @@ export default function ForecastClient({ series, seg, val }) {
             {months.length ? " (" + months.map(ym).join(" · ") + ")" : ""} · Active FG
           </div>
         </div>
-        <button className="btn-export" onClick={() => exportCSV(Object.values(skus), months)}>
-          ↓ Export CSV
+        <button className="btn-export" onClick={() => exportCSV(Object.values(skus), months, segMap, valMap)}>
+          ↓ Download full forecast (all SKUs)
         </button>
       </div>
 
@@ -86,15 +95,61 @@ export default function ForecastClient({ series, seg, val }) {
         ))}
       </div>
 
-      {tab === "Overview" && <Overview skus={skus} months={months} segMap={segMap} ranked={ranked} />}
+      {tab === "Overview" && <Overview skus={skus} months={months} segMap={segMap} ranked={ranked} meta={meta} />}
       {tab === "Accuracy" && <Accuracy skus={skus} segMap={segMap} ranked={ranked} />}
       {tab === "Model Lab" && <ModelLab skus={skus} months={months} segMap={segMap} ranked={ranked} />}
     </>
   );
 }
 
+// ---- Publish official baseline (writes forecast_log via API) -----------------
+function PublishBar({ meta }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  async function publish() {
+    if (!window.confirm(
+      "Publish forecast baseline hari ini?\n\nAngka dikunci & jadi sumber demand resmi untuk MPS / MRP. Publish ulang di hari yang sama akan menimpa."
+    )) return;
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch("/api/forecast/publish", { method: "POST" });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || "failed");
+      setMsg("✓ Baseline published " + j.run_date + " · " + fmt(j.skus) + " SKUs · MPS/MRP now use it");
+      router.refresh();
+    } catch (e) {
+      setMsg("✗ " + e.message);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card publish-bar">
+      <div>
+        <div className="kpi-label">Official Baseline</div>
+        <div style={{ marginTop: 6, fontSize: 14 }}>
+          {meta && meta.run_date ? (
+            <>Published <b>{meta.run_date}</b> · {fmt(meta.skus)} SKUs locked · feeding MPS / MRP</>
+          ) : (
+            <span style={{ color: "var(--muted)" }}>
+              Not published yet — MPS / MRP currently use the 12-week run-rate. Publish to lock this forecast as the official demand.
+            </span>
+          )}
+        </div>
+        {msg && (
+          <div style={{ marginTop: 7, fontSize: 13, color: msg[0] === "✓" ? "var(--green)" : "var(--red)" }}>{msg}</div>
+        )}
+      </div>
+      <button className="btn-export" onClick={publish} disabled={busy} style={busy ? { opacity: 0.6 } : {}}>
+        {busy ? "Publishing…" : "⤴ Publish baseline"}
+      </button>
+    </div>
+  );
+}
+
 // ============================ OVERVIEW =======================================
-function Overview({ skus, months, segMap, ranked }) {
+function Overview({ skus, months, segMap, ranked, meta }) {
   const list = Object.values(skus);
   let ae = 0, tot = 0;
   for (const x of list) { const b = x.methods[x.champ.method]; if (b) { ae += b.ae; tot += b.tot; } }
@@ -114,6 +169,8 @@ function Overview({ skus, months, segMap, ranked }) {
 
   return (
     <>
+      <PublishBar meta={meta} />
+
       <section className="kpi-grid">
         <div className="card">
           <div className="kpi-label">Portfolio Accuracy</div>
