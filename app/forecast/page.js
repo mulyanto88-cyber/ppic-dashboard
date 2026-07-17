@@ -36,9 +36,18 @@ export default async function Forecast() {
   // BE hanya tidak muncul, halaman tetap jalan.
   let be = [];
   try {
-    be = (await sb("v_current_month_be?select=sku_name,month,qty_to_date,month_progress_pct,be_qty")) || [];
+    be = (await sb("v_current_month_be?select=*")) || [];
   } catch (e) {
     be = [];
+  }
+
+  // Scope coverage (% volume tercakup Continue FG) untuk badge — resilient
+  let scope = null;
+  try {
+    const s = await sb("v_forecast_scope_coverage?select=*");
+    scope = (s && s[0]) || null;
+  } catch (e) {
+    scope = null;
   }
 
   if (error) {
@@ -54,7 +63,7 @@ export default async function Forecast() {
   return (
     <ForecastClient
       matrix={matrix} seg={seg} val={val} meta={meta}
-      live={live} liveDetail={liveDetail} liveErr={liveErr} be={be}
+      live={live} liveDetail={liveDetail} liveErr={liveErr} be={be} scope={scope}
     />
   );
 }

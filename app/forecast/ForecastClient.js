@@ -47,7 +47,7 @@ function exportCSV(list, months, segMap, valMap, beInfo) {
   const hasBE = !!(beInfo && beInfo.month);
   const head = ["No", "SKU", "Type", "ABC (value)", "XYZ", "Trend", "Champion Model", "Accuracy_%",
     ...histMonths.map((m) => "Actual " + ym(m)),
-    ...(hasBE ? ["BE " + ym(beInfo.month) + " (est)"] : []),
+    ...(hasBE ? ["MTD " + ym(beInfo.month), "Progress_%", "BE " + ym(beInfo.month) + " (est)"] : []),
     ...months.map((m) => "Forecast " + ym(m)), "Total 3-mo"];
   const rows = sorted.map((x, idx) => {
     const sg = segMap[x.name] || {};
@@ -58,7 +58,11 @@ function exportCSV(list, months, segMap, valMap, beInfo) {
     return [idx + 1, x.name, sg.type || "", valMap[x.name] || "", sg.xyz_class || "", sg.trend || "",
       METHODS[x.champ.method].label, acc,
       ...x.series.slice(-4).map((p) => p.q),
-      ...(hasBE ? [beRow && beRow.be_qty != null ? beRow.be_qty : ""] : []),
+      ...(hasBE ? [
+        beRow && beRow.qty_to_date != null ? beRow.qty_to_date : "",
+        beRow && beRow.month_progress_pct != null ? beRow.month_progress_pct : "",
+        beRow && beRow.be_qty != null ? beRow.be_qty : "",
+      ] : []),
       ...f.map((p) => p.q), tot3];
   });
   const csv = "﻿" + [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
@@ -70,7 +74,7 @@ function exportCSV(list, months, segMap, valMap, beInfo) {
   URL.revokeObjectURL(url);
 }
 
-export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null, be = [] }) {
+export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null, be = [], scope = null }) {
   const [tab, setTab] = useState("Overview");
   const { skus, months } = useMemo(() => computeModel(matrix), [matrix]);
   const segMap = useMemo(() => {
@@ -80,12 +84,15 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
   const valMap = useMemo(() => {
     const m = {}; for (const v of val) m[v.sku_name] = v.abc_tier_value; return m;
   }, [val]);
-  // Best Estimate bulan berjalan (July parsial -> proyeksi kurva mingguan bln lalu)
+  // Best Estimate bulan berjalan (proyeksi kurva mingguan bln lalu, per SKU)
   const beInfo = useMemo(() => {
     const map = {};
     for (const r of be) map[r.sku_name] = r;
     const month = be.length ? be[0].month : null;
-    const progress = be.length ? Number(be[0].month_progress_pct) : null;
+    // headline = kurva global (per-SKU pct beda-beda; global utk konteks)
+    const progress = be.length
+      ? Number(be[0].global_progress_pct != null ? be[0].global_progress_pct : be[0].month_progress_pct)
+      : null;
     const total = be.reduce((s, r) => (skus[r.sku_name] ? s + Number(r.be_qty || 0) : s), 0);
     return { map, month, progress, total };
   }, [be, skus]);
@@ -94,7 +101,22 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
     <>
       <div className="page-head">
         <div>
-          <h1 className="page-title">Forecast</h1>
+          <h1 className="page-title">
+            Forecast
+            {scope && scope.continue_pct != null && (
+              <span
+                className="badge growing"
+                style={{ marginLeft: 10, verticalAlign: "middle", fontSize: 11 }}
+                title={
+                  `Continue FG covers ${scope.continue_pct}% of total sales volume (trailing 3 complete months). ` +
+                  `Excluded: discontinued ${scope.discontinued_pct}% · unmatched / one-off ${scope.unmatched_pct}% ` +
+                  `(e.g. ended OEM projects, promo/free items).`
+                }
+              >
+                Scope {scope.continue_pct}% of volume
+              </span>
+            )}
+          </h1>
           <div className="page-sub">
             Per-SKU champion model · next 3 complete months
             {months.length ? " (" + months.map(ym).join(" · ") + ")" : ""} · Active FG
@@ -264,7 +286,7 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
         <h2 className="card-title">Total Actual vs Forecast by Month</h2>
         <div className="card-note">
           total units · all SKUs · last {histMonths.length} complete actual months
-          {hasBE ? ` · ${ym(beInfo.month)}* = Best Estimate (month-to-date ÷ ${pct(beInfo.progress)} progress, mirrored from last month's weekly curve — payday-aware)` : ""}
+          {hasBE ? ` · ${ym(beInfo.month)}* = Best Estimate: MTD ÷ progress % from each SKU's own weekly curve last month (global ${pct(beInfo.progress)} as fallback) — payday-aware` : ""}
           {" "}· next {months.length} forecast months (champion each)
         </div>
         <div className="barchart">
@@ -287,7 +309,7 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
         <h2 className="card-title">Forecast by SKU — All Active SKUs ({fmt(rows.length)})</h2>
         <div className="card-note">
           every Continue SKU with sales history · sorted by revenue · last {histMonths.length} actual months
-          {hasBE ? ` + ${ym(beInfo.month)} BE* (best estimate, ${pct(beInfo.progress)} month progress)` : ""}
+          {hasBE ? ` + ${ym(beInfo.month)} BE* (per-SKU curve · hover for MTD & progress)` : ""}
           {" "}· accuracy = 100 − backtest wMAPE · {PER_PAGE} rows per page
         </div>
         <div className="table-wrap">
@@ -336,12 +358,17 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
                     {hist4.map((p, j) => (
                       <td className="num" key={"h" + j} style={{ color: "var(--text-dim)" }}>{fmt(p.q)}</td>
                     ))}
-                    {hasBE && (
-                      <td className="num" style={{ color: "var(--amber)" }}>
-                        {beInfo.map[v.sku_name] && beInfo.map[v.sku_name].be_qty != null
-                          ? fmt(beInfo.map[v.sku_name].be_qty) : "—"}
-                      </td>
-                    )}
+                    {hasBE && (() => {
+                      const b = beInfo.map[v.sku_name];
+                      const tip = b
+                        ? `MTD ${fmt(b.qty_to_date)} ÷ ${b.month_progress_pct}% (${b.progress_basis || "curve"})`
+                        : "";
+                      return (
+                        <td className="num" style={{ color: "var(--amber)" }} title={tip}>
+                          {b && b.be_qty != null ? fmt(b.be_qty) : "—"}
+                        </td>
+                      );
+                    })()}
                     {f.map((p, j) => (
                       <td className="num" key={j} style={{ fontWeight: 650 }}>{fmt(p.q)}</td>
                     ))}
