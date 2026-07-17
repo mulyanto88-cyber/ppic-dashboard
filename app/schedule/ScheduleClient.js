@@ -47,7 +47,76 @@ function downloadCSV(head, body, name) {
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
-export default function ScheduleClient({ plan, pattern, capacity, meta }) {
+const CAPACITY_RULES = {
+  "Liquid 30ml": {
+    1: { full: 28000, half: 20000 },
+    2: { full: 27000, half: 19500 },
+    3: { full: 26000, half: 18500 },
+    4: { full: 25000, half: 17500 },
+  },
+  "Liquid 15ml": {
+    1: { full: 33000, half: 22000 },
+    2: { full: 32000, half: 21000 },
+    3: { full: 31000, half: 20000 },
+    4: { full: 30000, half: 19000 },
+  },
+  "Liquid 15ml ABC": {
+    1: { full: 19000, half: 12000 },
+    2: { full: 18500, half: 11500 },
+    3: { full: 18000, half: 11000 },
+    4: { full: 17500, half: 10500 },
+  },
+  "Liquid 15ml D": {
+    1: { full: 14000, half: 10000 },
+    2: { full: 13500, half: 9500 },
+    3: { full: 13000, half: 9000 },
+    4: { full: 12500, half: 8500 },
+  },
+  "Cartridge": {
+    1: { full: 15000, half: 10000 },
+    2: { full: 15000, half: 10000 },
+    3: { full: 15000, half: 10000 },
+    4: { full: 15000, half: 10000 },
+  },
+  "Device": {
+    1: { full: 7000, half: 5000 },
+    2: { full: 6500, half: 4500 },
+    3: { full: 6000, half: 4000 },
+    4: { full: 5500, half: 3500 },
+  },
+  "Capsule": {
+    1: { full: 1500, half: 1000 },
+    2: { full: 1500, half: 1000 },
+    3: { full: 1500, half: 1000 },
+    4: { full: 1500, half: 1000 },
+  }
+};
+
+const getRulesForLine = (line) => {
+  const l = String(line || "").toLowerCase();
+  if (l.includes("30ml")) return CAPACITY_RULES["Liquid 30ml"];
+  if (l.includes("15ml")) {
+    if (l.includes("abc") || l.includes("19 mp") || l.includes("19mp")) return CAPACITY_RULES["Liquid 15ml ABC"];
+    if (l.includes(" d") || l.includes("13 mp") || l.includes("13mp")) return CAPACITY_RULES["Liquid 15ml D"];
+    return CAPACITY_RULES["Liquid 15ml"];
+  }
+  if (l.includes("cartridge")) return CAPACITY_RULES["Cartridge"];
+  if (l.includes("device")) return CAPACITY_RULES["Device"];
+  if (l.includes("capsule")) return CAPACITY_RULES["Capsule"];
+  return null;
+};
+
+const formatCapRange = (line, wcap) => {
+  const rules = getRulesForLine(line);
+  if (rules) {
+    const min = 3 * rules[4].full;
+    const max = 3 * rules[1].full;
+    return `${fmt(min)} – ${fmt(max)}`;
+  }
+  return wcap ? fmt((wcap * 3) / WEEK_SHIFTS) : "—";
+};
+
+export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatrix = [] }) {
   const [page, setPage] = useState(0);
   const [mode, setMode] = useState("weekly");     // "weekly" | "daily"
 
@@ -57,6 +126,31 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
   const capMap = useMemo(() => {
     const m = {}; for (const r of capacity) m[r.prod_line] = r.weekly_capacity == null ? null : Number(r.weekly_capacity); return m;
   }, [capacity]);
+
+  // Material (RMPM) pool utk gate produksi: SOH per komponen.
+  // Consignment/Daily = pasokan terjamin (Infinity). Komponen TANPA baris stok
+  // (soh null) TIDAK di-gate — hindari false-block karena beda penamaan.
+  const mat = useMemo(() => {
+    const pool = {}; const bomMap = {};
+    for (const row of bomMatrix) {
+      const pk = String(row.product || "").toUpperCase().trim();
+      const arr = [];
+      for (const c of row.comps || []) {
+        const k = String(c.c || "").toUpperCase().trim();
+        if (!(k in pool)) {
+          pool[k] = {
+            avail: c.mode ? Infinity : c.soh == null ? null : Number(c.soh),
+            inc: Number(c.inc || 0),
+            name: c.c,
+          };
+        }
+        arr.push({ k, p: Number(c.p) || 0 });
+      }
+      bomMap[pk] = arr;
+    }
+    return { pool, bomMap };
+  }, [bomMatrix]);
+  const hasMatGate = bomMatrix.length > 0;
 
   // Horizon minggu (mulai Senin minggu berjalan)
   const weeks = useMemo(() => {
@@ -152,7 +246,22 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
       .sort((a, b) => a.cover - b.cover || (b.req1 + b.req2) - (a.req1 + a.req2));
 
     const list = [];
-    let unfitTotal = 0;
+    let unfitTotal = 0, matShortTotal = 0;
+    const avail = {};
+    for (const k in mat.pool) avail[k] = mat.pool[k].avail;
+
+    // Helper hitung kapasitas harian dinamis berbasis changeover SKU
+    const getDailyCap = (line, dayIdx, numSkus) => {
+      const rules = getRulesForLine(line);
+      const shifts = days[dayIdx].shifts; // 3 weekdays, 1.5 Saturday
+      if (rules) {
+        const n = Math.min(4, Math.max(1, numSkus));
+        const target = shifts === 1.5 ? rules[n].half : rules[n].full;
+        return 3 * target;
+      }
+      const wcap = capMap[line];
+      return wcap ? (wcap * shifts) / WEEK_SHIFTS : Infinity;
+    };
 
     for (const x of prio) {
       const line = x.r.prod_line;
@@ -160,8 +269,39 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
       const alloc = Array(nD).fill(0);
       let spill = 0, unfit = 0;
 
+      // Material gate
+      const comps = mat.bomMap[String(x.r.sku_name).toUpperCase().trim()] || [];
+      let req1 = x.req1, req2 = x.req2, matShort = 0, limComp = null, limSoh = null, limInc = null;
+      {
+        let mx = Infinity, lim = null;
+        for (const c of comps) {
+          if (c.p > 0) {
+            const a = avail[c.k];
+            if (a != null && a !== Infinity) {
+              const u = Math.floor(a / c.p);
+              if (u < mx) { mx = u; lim = c; }
+            }
+          }
+        }
+        const buildable = mx === Infinity ? Infinity : Math.max(0, Math.floor(mx / LOT) * LOT);
+        if (buildable < req1 + req2) {
+          matShort = req1 + req2 - buildable;
+          limComp = lim ? mat.pool[lim.k].name : null;
+          limSoh = lim ? Math.max(0, Math.round(avail[lim.k])) : null;
+          limInc = lim ? mat.pool[lim.k].inc : null;
+          const cut2 = Math.min(req2, matShort);
+          req2 -= cut2;
+          req1 -= matShort - cut2;
+        }
+        const sched = req1 + req2;
+        for (const c of comps) {
+          const a = avail[c.k];
+          if (a != null && a !== Infinity) avail[c.k] = a - sched * c.p;
+        }
+      }
+
       if (!wcap) {
-        // tanpa kapasitas (Assembly/Other): sebar rata dalam LOT 500, hari awal dapat lot ekstra
+        // tanpa kapasitas (Assembly/Other)
         const spread = (req, from, to) => {
           if (req <= 0) return;
           const n = to - from + 1;
@@ -172,30 +312,35 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
             alloc[i] += v; load[line][i] += v;
           }
         };
-        spread(x.req1, 0, w2start - 1);
-        spread(x.req2, w2start, nD - 1);
+        spread(req1, 0, w2start - 1);
+        spread(req2, w2start, nD - 1);
       } else {
         const place = (reqIn, from, isW1) => {
           let req = reqIn;
           for (let i = from; i < nD && req > 0; i++) {
-            const cap = (wcap * days[i].shifts) / WEEK_SHIFTS;
+            const isNewSku = !skusOnDay[line][i].has(x.r.sku_name);
+            const nextSkuCount = skusOnDay[line][i].size + (isNewSku ? 1 : 0);
+            
+            if (isNewSku && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
+            
+            const cap = getDailyCap(line, i, nextSkuCount);
             const free = cap - load[line][i];
-            // alokasi harian dalam KELIPATAN LOT 500 (batch produksi riil)
             const take = Math.min(req, Math.floor(free / LOT) * LOT);
             if (take <= 0) continue;
-            if (!skusOnDay[line][i].has(x.r.sku_name) && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
+            
             alloc[i] += take; load[line][i] += take;
-            skusOnDay[line][i].add(x.r.sku_name);
+            if (isNewSku) skusOnDay[line][i].add(x.r.sku_name);
             if (isW1 && days[i].week === 1) spill += take;
             req -= take;
           }
           return req;
         };
-        unfit += place(x.req1, 0, true);
-        unfit += place(x.req2, w2start, false);
+        unfit += place(req1, 0, true);
+        unfit += place(req2, w2start, false);
       }
 
       unfitTotal += unfit;
+      matShortTotal += matShort;
       list.push({
         ...x.r,
         cover: x.cover,
@@ -203,17 +348,22 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
         total2: Math.round(alloc.reduce((s, v) => s + v, 0)),
         spill: Math.round(spill),
         unfit: Math.round(unfit),
+        matShort: Math.round(matShort),
+        need2: x.req1 + x.req2,
+        limComp, limSoh, limInc,
       });
     }
-    // list TIDAK di-sort ulang: urutan = urutan prioritas alokasi (cover terendah dulu)
 
     const dayTotals = Array(nD).fill(0);
     for (const L of Object.keys(load)) load[L].forEach((v, i) => { dayTotals[i] += v; });
 
     const total = list.reduce((s, r) => s + r.total2, 0);
     const spillSkus = list.filter((r) => r.spill > 0).length;
-    return { list, load, w2start, dayTotals, kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), spillSkus } };
-  }, [rows, days, capMap, lines]);
+    return {
+      list, load, w2start, dayTotals, skusOnDay,
+      kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), matShort: Math.round(matShortTotal), spillSkus },
+    };
+  }, [rows, days, capMap, lines, mat]);
 
   // ---- pagination (dipakai dua mode) -----------------------------------------
   const tableRows = mode === "daily" ? daily.list : rows;
@@ -227,9 +377,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
     const stamp = new Date().toISOString().slice(0, 10);
     if (mode === "daily") {
       downloadCSV(
-        ["Priority", "SKU", "Line", "ABC", "Cover_wk", ...days.map((d) => d.iso), "Total", "W1_shifted_to_W2", "Unscheduled"],
+        ["Priority", "SKU", "Line", "ABC", "Cover_wk", ...days.map((d) => d.iso), "Total",
+          "W1_shifted_to_W2", "Unscheduled_capacity", "Blocked_material", "Limiting_material"],
         daily.list.map((r, i) => [i + 1, r.sku_name, r.prod_line, r.abc_tier || "",
-          isFinite(r.cover) ? Math.round(r.cover * 10) / 10 : "", ...r.alloc, r.total2, r.spill, r.unfit]),
+          isFinite(r.cover) ? Math.round(r.cover * 10) / 10 : "", ...r.alloc, r.total2,
+          r.spill, r.unfit, r.matShort, r.matShort > 0 ? r.limComp || "" : ""]),
         `production_schedule_daily_${stamp}.csv`
       );
     } else {
@@ -291,7 +443,10 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
             : "Using the 12-week run-rate — publish a forecast baseline to drive this from the official forecast."}
           {" "}
           {mode === "daily"
-            ? "Daily view levels PRODUCTION across working days within capacity — lowest-cover SKUs get the earliest slots; week-1 overflow shifts into week 2."
+            ? "Daily view levels PRODUCTION across working days within capacity — lowest-cover SKUs get the earliest slots; week-1 overflow shifts into week 2." +
+              (hasMatGate
+                ? " Production is also GATED by material (RMPM) on-hand — consignment/daily supplies count as always available."
+                : " Material gate inactive — run migration 0039 (v_bom_matrix) to block production when RMPM is empty.")
             : "Assumes production is available within its week (FG lead ≤ 1 week)."}
         </div>
       </div>
@@ -326,13 +481,17 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
           </div>
         </div>
         {mode === "daily" ? (
-          <div className="card kpi-card" style={{ borderColor: daily.kpi.unfit > 0 ? "var(--red)" : undefined }}>
-            <div className={"kpi-icon " + (daily.kpi.unfit > 0 ? "red" : "green")}><IconAlertCircle /></div>
+          <div className="card kpi-card" style={{ borderColor: daily.kpi.unfit + daily.kpi.matShort > 0 ? "var(--red)" : undefined }}>
+            <div className={"kpi-icon " + (daily.kpi.unfit + daily.kpi.matShort > 0 ? "red" : "green")}><IconAlertCircle /></div>
             <div>
               <div className="kpi-label">Unscheduled Units</div>
-              <div className="kpi-value" style={{ color: daily.kpi.unfit ? "var(--red)" : "var(--green)" }}>{fmt(daily.kpi.unfit)}</div>
+              <div className="kpi-value" style={{ color: daily.kpi.unfit + daily.kpi.matShort ? "var(--red)" : "var(--green)" }}>
+                {fmt(daily.kpi.unfit + daily.kpi.matShort)}
+              </div>
               <div className="kpi-sub">
-                {daily.kpi.unfit > 0 ? "no capacity left in 2 weeks — add shifts" : daily.kpi.spillSkus + " SKUs shifted W1 → W2"}
+                {daily.kpi.unfit + daily.kpi.matShort > 0
+                  ? fmt(daily.kpi.unfit) + " capacity · " + fmt(daily.kpi.matShort) + " material short"
+                  : daily.kpi.spillSkus + " SKUs shifted W1 → W2"}
               </div>
             </div>
           </div>
@@ -417,13 +576,24 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
                   return (
                     <tr key={L}>
                       <td className="name">{L}</td>
-                      <td className="num">{wcap == null ? "—" : fmt((wcap * 3) / WEEK_SHIFTS)}</td>
+                      <td className="num" style={{ fontSize: "11px", whiteSpace: "nowrap" }}>
+                        {formatCapRange(L, wcap)}
+                      </td>
                       {load.map((u, i) => {
-                        const capD = wcap ? (wcap * days[i].shifts) / WEEK_SHIFTS : null;
+                        const numSkus = daily.skusOnDay[L][i].size;
+                        const rules = getRulesForLine(L);
+                        let capD = null;
+                        if (rules) {
+                          const n = Math.min(4, Math.max(1, numSkus || 1));
+                          const target = days[i].shifts === 1.5 ? rules[n].half : rules[n].full;
+                          capD = 3 * target;
+                        } else if (wcap) {
+                          capD = (wcap * days[i].shifts) / WEEK_SHIFTS;
+                        }
                         const util = capD ? (u / capD) * 100 : null;
                         return (
                           <td className="num" key={i} style={heatStyle(util)}
-                            title={fmt(u) + " units" + (capD ? " · " + pct(util) + " of " + fmt(capD) : "")}>
+                            title={fmt(u) + " units" + (capD ? " · " + pct(util) + " of " + fmt(capD) + " (" + numSkus + " SKUs)" : "")}>
                             {u < 1 ? "—" : capD ? pct(util) : fmt(u)}
                           </td>
                         );
@@ -431,6 +601,42 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {mode === "daily" && daily.list.some((r) => r.matShort > 0) && (
+        <div className="card" style={{ borderColor: "var(--red)" }}>
+          <h2 className="card-title">Material Shortages — RMPM blocking production</h2>
+          <div className="card-note">
+            SKUs whose 2-week plan is cut because a material is short · scarce materials go to the most critical SKUs first ·
+            follow up in the MRP tab / with purchasing
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Priority #</th><th>SKU</th><th className="num">Needed 2-wk</th><th className="num">Schedulable</th>
+                  <th className="num">Short (FG)</th><th>Limiting Material</th><th className="num">Mat SOH</th><th className="num">PO Incoming</th>
+                </tr>
+              </thead>
+              <tbody>
+                {daily.list.map((r, i) => r.matShort > 0 ? (
+                  <tr key={r.sku_name}>
+                    <td className="num" style={{ color: "var(--muted)" }}>{i + 1}</td>
+                    <td className="name">{r.sku_name}</td>
+                    <td className="num">{fmt(r.need2)}</td>
+                    <td className="num">{fmt(r.need2 - r.matShort)}</td>
+                    <td className="num" style={{ color: "var(--red)", fontWeight: 700 }}>{fmt(r.matShort)}</td>
+                    <td className="name">{r.limComp || "—"}</td>
+                    <td className="num">{r.limSoh == null ? "—" : fmt(r.limSoh)}</td>
+                    <td className="num" style={{ color: r.limInc > 0 ? "var(--green)" : "var(--muted)" }}>
+                      {r.limInc > 0 ? fmt(r.limInc) : "—"}
+                    </td>
+                  </tr>
+                ) : null)}
               </tbody>
             </table>
           </div>
@@ -536,8 +742,12 @@ export default function ScheduleClient({ plan, pattern, capacity, meta }) {
                         </td>
                       ))}
                       <td className="num" style={{ fontWeight: 700 }}
-                        title={r.spill > 0 ? fmt(r.spill) + " units of week-1 need shifted to week 2 (capacity)" : undefined}>
-                        {fmt(r.total2)}{r.spill > 0 ? " ⚠" : ""}{r.unfit > 0 ? " ⛔" : ""}
+                        title={[
+                          r.spill > 0 ? fmt(r.spill) + " units of week-1 need shifted to week 2 (capacity)" : null,
+                          r.unfit > 0 ? fmt(r.unfit) + " units unscheduled — no line capacity in 2 weeks" : null,
+                          r.matShort > 0 ? fmt(r.matShort) + " units blocked — material short: " + (r.limComp || "?") : null,
+                        ].filter(Boolean).join(" · ") || undefined}>
+                        {fmt(r.total2)}{r.spill > 0 ? " ⚠" : ""}{r.unfit > 0 || r.matShort > 0 ? " ⛔" : ""}
                       </td>
                     </tr>
                   ))
