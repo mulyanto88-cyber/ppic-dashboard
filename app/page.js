@@ -27,29 +27,43 @@ function pctOf(part, total) {
   return total > 0 ? pct((Number(part) || 0) / total * 100) : "—";
 }
 
+const IconTrendingUp = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline><polyline points="16 7 22 7 22 13"></polyline></svg>;
+const IconPackage = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>;
+const IconTag = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>;
+const IconLayers = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 12 12 17 22 12"></polyline><polyline points="2 17 12 22 22 17"></polyline></svg>;
+
 export default async function DemandAnalytics() {
   let revenue = [], weekly = [], skuValue = [], seg = [], matrix = [],
     movement = [], abc = [], recent = [], watch = [];
-  let error = null;
-  try {
-    const [a, b, c, d, e, f, g, h, i] = await Promise.all([
-      sb("v_revenue_monthly?select=*&order=month.asc"),
-      sb("v_weekly_trend?select=*&order=week_start.asc"),
-      sb("v_sku_value?select=*&order=value_12m.desc"),
-      sb("v_sku_segmentation?select=sku_name,abc_tier,movement_class,xyz_class,trend"),
-      sb("v_sku_segmentation_summary?select=*"),
-      sb("v_sku_movement_summary?select=*"),
-      sb("v_sku_abc_summary?select=*"),
-      sb("v_sku_recent_sales?select=*"),
-      sb("v_sku_trend_watch?select=*&limit=12"),
-    ]);
-    revenue = a || []; weekly = b || []; skuValue = c || []; seg = d || [];
-    matrix = e || []; movement = f || []; abc = g || []; recent = h || []; watch = i || [];
-  } catch (err) {
-    error = err.message;
-  }
+  
+  const results = await Promise.allSettled([
+    sb("v_revenue_monthly?select=*&order=month.asc"),
+    sb("v_weekly_trend?select=*&order=week_start.asc"),
+    sb("v_sku_value?select=*&order=value_12m.desc"),
+    sb("v_sku_segmentation?select=sku_name,abc_tier,movement_class,xyz_class,trend"),
+    sb("v_sku_segmentation_summary?select=*"),
+    sb("v_sku_movement_summary?select=*"),
+    sb("v_sku_abc_summary?select=*"),
+    sb("v_sku_recent_sales?select=*"),
+    sb("v_sku_trend_watch?select=*&limit=12"),
+  ]);
 
-  if (error) return <div className="card error"><h2>Failed to load data</h2><pre>{error}</pre></div>;
+  const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
+  
+  revenue = getVal(results[0]);
+  weekly = getVal(results[1]);
+  skuValue = getVal(results[2]);
+  seg = getVal(results[3]);
+  matrix = getVal(results[4]);
+  movement = getVal(results[5]);
+  abc = getVal(results[6]);
+  recent = getVal(results[7]);
+  watch = getVal(results[8]);
+
+  const hasData = results.some(r => r.status === "fulfilled");
+  if (!hasData) {
+    return <div className="card error"><h2>Failed to load data</h2><pre>Database connection failed or returned no data.</pre></div>;
+  }
 
   const totalValue = skuValue.reduce((s, r) => s + Number(r.value_12m || 0), 0);
   const totalQty = skuValue.reduce((s, r) => s + Number(r.qty_12m || 0), 0);
@@ -83,10 +97,38 @@ export default async function DemandAnalytics() {
       </div>
 
       <section className="kpi-grid">
-        <div className="card"><div className="kpi-label">Revenue (12 mo)</div><div className="kpi-value">{rp(totalValue)}</div><div className="kpi-sub">sales value (IDR)</div></div>
-        <div className="card"><div className="kpi-label">Units Sold (12 mo)</div><div className="kpi-value">{fmt(totalQty)}</div><div className="kpi-sub">units delivered</div></div>
-        <div className="card"><div className="kpi-label">Avg. Price / Unit</div><div className="kpi-value">{rp(avgPrice)}</div><div className="kpi-sub">blended</div></div>
-        <div className="card"><div className="kpi-label">Active SKUs</div><div className="kpi-value">{fmt(skuValue.length)}</div><div className="kpi-sub">{fmt(nA)} Tier A (by value)</div></div>
+        <div className="card kpi-card">
+          <div className="kpi-icon accent"><IconTrendingUp /></div>
+          <div>
+            <div className="kpi-label">Revenue (12 mo)</div>
+            <div className="kpi-value">{rp(totalValue)}</div>
+            <div className="kpi-sub">sales value (IDR)</div>
+          </div>
+        </div>
+        <div className="card kpi-card">
+          <div className="kpi-icon green"><IconPackage /></div>
+          <div>
+            <div className="kpi-label">Units Sold (12 mo)</div>
+            <div className="kpi-value">{fmt(totalQty)}</div>
+            <div className="kpi-sub">units delivered</div>
+          </div>
+        </div>
+        <div className="card kpi-card">
+          <div className="kpi-icon amber"><IconTag /></div>
+          <div>
+            <div className="kpi-label">Avg. Price / Unit</div>
+            <div className="kpi-value">{rp(avgPrice)}</div>
+            <div className="kpi-sub">blended</div>
+          </div>
+        </div>
+        <div className="card kpi-card">
+          <div className="kpi-icon muted"><IconLayers /></div>
+          <div>
+            <div className="kpi-label">Active SKUs</div>
+            <div className="kpi-value">{fmt(skuValue.length)}</div>
+            <div className="kpi-sub">{fmt(nA)} Tier A (by value)</div>
+          </div>
+        </div>
       </section>
 
       <div className="card">

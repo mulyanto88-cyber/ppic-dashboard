@@ -10,25 +10,33 @@ const COVER_BADGE = {
   Overstock: "na",
 };
 
-export default async function InventoryHealth() {
-  let kpi = {}, byMove = [], cover = [], inv = [], error = null;
-  try {
-    const [a, b, c, d] = await Promise.all([
-      sb("v_kpi_inventory_value?select=*"),
-      sb("v_inventory_by_movement?select=*"),
-      sb("v_mps_cover?select=*&order=weeks_of_cover.asc"),
-      sb("v_inventory_fg?select=*&order=soh_value_est.desc"),
-    ]);
-    kpi = (a && a[0]) || {}; byMove = b || []; cover = c || []; inv = d || [];
-  } catch (e) {
-    error = e.message;
-  }
+const IconDollarSign = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>;
+const IconLayers = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 12 12 17 22 12"></polyline><polyline points="2 17 12 22 22 17"></polyline></svg>;
+const IconAlertTriangle = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>;
+const IconTrendingDown = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"></polyline><polyline points="16 17 22 17 22 11"></polyline></svg>;
 
-  if (error) {
+export default async function InventoryHealth() {
+  let kpi = {}, byMove = [], cover = [], inv = [];
+  
+  const results = await Promise.allSettled([
+    sb("v_kpi_inventory_value?select=*"),
+    sb("v_inventory_by_movement?select=*"),
+    sb("v_mps_cover?select=*&order=weeks_of_cover.asc"),
+    sb("v_inventory_fg?select=*&order=soh_value_est.desc"),
+  ]);
+
+  const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
+  kpi = getVal(results[0])[0] || {};
+  byMove = getVal(results[1]);
+  cover = getVal(results[2]);
+  inv = getVal(results[3]);
+
+  const hasData = results.some(r => r.status === "fulfilled");
+  if (!hasData) {
     return (
       <div className="card error">
         <h2>Failed to load data</h2>
-        <pre>{error}</pre>
+        <pre>Database connection failed or returned no data.</pre>
         <p>Make sure migrations up to 0015 have been run and the Stock ETL has loaded.</p>
       </div>
     );
@@ -64,25 +72,37 @@ export default async function InventoryHealth() {
       </div>
 
       <section className="kpi-grid">
-        <div className="card">
-          <div className="kpi-label">Inventory Value (est.)</div>
-          <div className="kpi-value">{rp(kpi.total_value_est)}</div>
-          <div className="kpi-sub">{fmt(kpi.total_qty)} units on hand</div>
+        <div className="card kpi-card">
+          <div className="kpi-icon accent"><IconDollarSign /></div>
+          <div>
+            <div className="kpi-label">Inventory Value (est.)</div>
+            <div className="kpi-value">{rp(kpi.total_value_est)}</div>
+            <div className="kpi-sub">{fmt(kpi.total_qty)} units on hand</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">SKUs with Stock</div>
-          <div className="kpi-value">{fmt(kpi.sku_with_stock)}</div>
-          <div className="kpi-sub">of {fmt(kpi.sku_count)} active FG</div>
+        <div className="card kpi-card">
+          <div className="kpi-icon green"><IconLayers /></div>
+          <div>
+            <div className="kpi-label">SKUs with Stock</div>
+            <div className="kpi-value">{fmt(kpi.sku_with_stock)}</div>
+            <div className="kpi-sub">of {fmt(kpi.sku_count)} active FG</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">Stock-out SKUs</div>
-          <div className="kpi-value" style={{ color: "var(--red)" }}>{fmt(kpi.stockout_sku)}</div>
-          <div className="kpi-sub">zero on hand</div>
+        <div className="card kpi-card" style={{ borderColor: kpi.stockout_sku > 0 ? "var(--red)" : undefined }}>
+          <div className="kpi-icon red" style={{ background: "var(--red-soft)", color: "var(--red)" }}><IconAlertTriangle /></div>
+          <div>
+            <div className="kpi-label">Stock-out SKUs</div>
+            <div className="kpi-value" style={{ color: "var(--red)" }}>{fmt(kpi.stockout_sku)}</div>
+            <div className="kpi-sub">zero on hand</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">Slow / Dead Value</div>
-          <div className="kpi-value" style={{ color: "var(--amber)" }}>{rp(slowDeadValue)}</div>
-          <div className="kpi-sub">capital tied in slow/dead stock</div>
+        <div className="card kpi-card" style={{ borderColor: slowDeadValue > 0 ? "var(--amber)" : undefined }}>
+          <div className="kpi-icon amber"><IconTrendingDown /></div>
+          <div>
+            <div className="kpi-label">Slow / Dead Value</div>
+            <div className="kpi-value" style={{ color: "var(--amber)" }}>{rp(slowDeadValue)}</div>
+            <div className="kpi-sub">capital tied in slow/dead stock</div>
+          </div>
         </div>
       </section>
 

@@ -6,15 +6,21 @@ export const dynamic = "force-dynamic";
 export default async function Forecast() {
   let matrix = [], seg = [], val = [], meta = null, error = null;
   try {
-    // matrix = 1 baris per SKU (deret 24 bln di-array) — deret flat kena
-    // limit 1000 baris PostgREST sehingga hanya ±40 SKU yang terangkut.
-    const [a, b, c, d] = await Promise.all([
+    const results = await Promise.allSettled([
       sb("v_sku_monthly_matrix?select=sku_name,start_month,qtys"),
       sb("v_sku_segmentation?select=sku_name,type,abc_tier,xyz_class,trend,qty_12m"),
       sb("v_sku_value?select=sku_name,value_12m,abc_tier_value&order=value_12m.desc"),
       sb("v_forecast_baseline_meta?select=*"),
     ]);
-    matrix = a || []; seg = b || []; val = c || []; meta = (d && d[0]) || null;
+    const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
+    matrix = getVal(results[0]);
+    seg = getVal(results[1]);
+    val = getVal(results[2]);
+    meta = getVal(results[3])[0] || null;
+    
+    if (results[0].status === "rejected") {
+       error = "Failed to load matrix data: " + results[0].reason?.message;
+    }
   } catch (e) {
     error = e.message;
   }

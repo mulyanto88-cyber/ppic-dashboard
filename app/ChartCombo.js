@@ -24,7 +24,7 @@ export default function ChartCombo({ data }) {
           return (
             <rect key={i} x={padX + slot * i + slot * 0.22} y={padTop + plotH - h}
               width={slot * 0.56} height={h} rx="2.5"
-              style={{ fill: "var(--accent)", opacity: hi === i ? 0.9 : 0.5 }} />
+              style={{ fill: "var(--accent)", opacity: hi === i ? 0.9 : 0.5, transition: "all 0.2s ease-in-out" }} />
           );
         })}
         <path d={path} style={{ fill: "none", stroke: "var(--green)", strokeWidth: 2 }} />

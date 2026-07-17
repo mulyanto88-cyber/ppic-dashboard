@@ -14,7 +14,7 @@ export default function WeeklyBars({ data }) {
           return (
             <div className="bar-col" key={i} onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(-1)}>
               <div className="bar-val">{fmt(v)}</div>
-              <div className="bar hl" style={{ height: (v / max) * 100 + "%", opacity: hi === i ? 1 : 0.82 }} />
+              <div className="bar hl" style={{ height: (v / max) * 100 + "%", opacity: hi === i ? 1 : 0.82, transition: "all 0.2s ease-in-out" }} />
               <div className="bar-label">{dmon(d.week_start)}</div>
             </div>
           );
