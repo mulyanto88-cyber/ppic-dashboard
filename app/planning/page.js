@@ -10,34 +10,41 @@ const CAP_BADGE = {
   "No line": "na",
 };
 
+const IconServer = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>;
+const IconAlertCircle = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>;
+const IconArrowDownCircle = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="8" x2="12" y2="16"></line></svg>;
+const IconActivity = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>;
+
 function UtilBar({ pct }) {
   const p = Math.min(100, Math.max(0, Number(pct) || 0));
   const color = p > 100 ? "var(--red)" : p > 85 ? "var(--amber)" : "var(--green)";
   return (
     <div style={{ background: "var(--panel-2)", borderRadius: 6, height: 8, width: 120, display: "inline-block", verticalAlign: "middle" }}>
-      <div style={{ width: p + "%", height: "100%", background: color, borderRadius: 6 }} />
+      <div style={{ width: p + "%", height: "100%", background: color, borderRadius: 6, transition: "width 0.3s ease" }} />
     </div>
   );
 }
 
 export default async function Planning() {
-  let cap = [], load = [], plan = [], error = null;
-  try {
-    const [a, b, c] = await Promise.all([
-      sb("v_mps_capacity?select=*"),
-      sb("v_mps_line_load?select=*"),
-      sb("v_mps_plan?select=*&order=net_requirement.desc&limit=40"),
-    ]);
-    cap = a || []; load = b || []; plan = c || [];
-  } catch (e) {
-    error = e.message;
-  }
+  let cap = [], load = [], plan = [];
+  
+  const results = await Promise.allSettled([
+    sb("v_mps_capacity?select=*"),
+    sb("v_mps_line_load?select=*"),
+    sb("v_mps_plan?select=*&order=net_requirement.desc&limit=40"),
+  ]);
 
-  if (error) {
+  const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
+  cap = getVal(results[0]);
+  load = getVal(results[1]);
+  plan = getVal(results[2]);
+
+  const hasData = results.some(r => r.status === "fulfilled");
+  if (!hasData) {
     return (
       <div className="card error">
         <h2>Failed to load data</h2>
-        <pre>{error}</pre>
+        <pre>Database connection failed or returned no data.</pre>
         <p>Make sure migrations 0016 &amp; 0017 have been run.</p>
       </div>
     );
@@ -74,25 +81,37 @@ export default async function Planning() {
       </div>
 
       <section className="kpi-grid">
-        <div className="card">
-          <div className="kpi-label">Production Lines</div>
-          <div className="kpi-value">{fmt(cap.filter((c) => c.weekly_capacity).length)}</div>
-          <div className="kpi-sub">with defined capacity</div>
+        <div className="card kpi-card">
+          <div className="kpi-icon accent"><IconServer /></div>
+          <div>
+            <div className="kpi-label">Production Lines</div>
+            <div className="kpi-value">{fmt(cap.filter((c) => c.weekly_capacity).length)}</div>
+            <div className="kpi-sub">with defined capacity</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">Lines Over Capacity</div>
-          <div className="kpi-value" style={{ color: overLines ? "var(--red)" : "var(--green)" }}>{fmt(overLines)}</div>
-          <div className="kpi-sub">demand &gt; weekly capacity</div>
+        <div className="card kpi-card" style={{ borderColor: overLines > 0 ? "var(--red)" : undefined }}>
+          <div className="kpi-icon red" style={{ background: overLines > 0 ? "var(--red-soft)" : undefined, color: overLines > 0 ? "var(--red)" : "var(--green)" }}><IconAlertCircle /></div>
+          <div>
+            <div className="kpi-label">Lines Over Capacity</div>
+            <div className="kpi-value" style={{ color: overLines ? "var(--red)" : "var(--green)" }}>{fmt(overLines)}</div>
+            <div className="kpi-sub">demand &gt; weekly capacity</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">SKUs Below Min</div>
-          <div className="kpi-value" style={{ color: "var(--amber)" }}>{fmt(needCount)}</div>
-          <div className="kpi-sub">need production to reach 30-day stock</div>
+        <div className="card kpi-card">
+          <div className="kpi-icon amber"><IconArrowDownCircle /></div>
+          <div>
+            <div className="kpi-label">SKUs Below Min</div>
+            <div className="kpi-value" style={{ color: "var(--amber)" }}>{fmt(needCount)}</div>
+            <div className="kpi-sub">need production to reach 30-day stock</div>
+          </div>
         </div>
-        <div className="card">
-          <div className="kpi-label">Busiest Line</div>
-          <div className="kpi-value" style={{ fontSize: 18 }}>{cap[0] ? cap[0].prod_line : "—"}</div>
-          <div className="kpi-sub">{cap[0] && cap[0].utilization_pct != null ? cap[0].utilization_pct + "% util." : "—"}</div>
+        <div className="card kpi-card">
+          <div className="kpi-icon muted"><IconActivity /></div>
+          <div>
+            <div className="kpi-label">Busiest Line</div>
+            <div className="kpi-value" style={{ fontSize: 18 }}>{cap[0] ? cap[0].prod_line : "—"}</div>
+            <div className="kpi-sub">{cap[0] && cap[0].utilization_pct != null ? cap[0].utilization_pct + "% util." : "—"}</div>
+          </div>
         </div>
       </section>
 

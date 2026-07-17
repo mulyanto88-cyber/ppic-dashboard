@@ -6,13 +6,18 @@ export const dynamic = "force-dynamic";
 
 const MAT_BADGE = { Critical: "declining", "Below Min": "stable", OK: "growing" };
 
+const IconDollarSign = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>;
+const IconPackage = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>;
+const IconTag = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>;
+const IconTrendingUp = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>;
+
 function Bars({ data, valueKey, labelKey }) {
   const max = Math.max(1, ...data.map((d) => Number(d[valueKey]) || 0));
   return (
     <div className="barchart">
       {data.map((d, i) => (
         <div className="bar-col" key={i}>
-          <div className="bar" style={{ height: (Number(d[valueKey]) || 0) / max * 100 + "%" }} />
+          <div className="bar hl" style={{ height: (Number(d[valueKey]) || 0) / max * 100 + "%", transition: "all 0.2s ease-in-out" }} />
           <div className="bar-label">{d[labelKey]}</div>
         </div>
       ))}
@@ -36,7 +41,7 @@ export default async function DeepDive({ searchParams }) {
   if (sku) {
     const enc = encodeURIComponent(sku);
     try {
-      const [seg, val, inv, fc, sales, bom, mrp] = await Promise.all([
+      const results = await Promise.allSettled([
         sb(`v_sku_segmentation?sku_name=ilike.${enc}`),
         sb(`v_sku_value?sku_name=ilike.${enc}`),
         sb(`v_inventory_fg?sku_name=ilike.${enc}`),
@@ -45,15 +50,24 @@ export default async function DeepDive({ searchParams }) {
         sb(`bom?select=component,per_pcs&product=ilike.${enc}&order=component.asc`),
         sb(`v_mrp?select=component,uom,weeks_cover,status`),
       ]);
+      const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
+      const seg = getVal(results[0]);
+      const val = getVal(results[1]);
+      const inv = getVal(results[2]);
+      const fc = getVal(results[3]);
+      const sales = getVal(results[4]);
+      const bom = getVal(results[5]);
+      const mrp = getVal(results[6]);
+
       const matMap = {};
-      for (const m of mrp || []) matMap[(m.component || "").toUpperCase().trim()] = m;
+      for (const m of mrp) matMap[(m.component || "").toUpperCase().trim()] = m;
       detail = {
-        seg: (seg && seg[0]) || {},
-        val: (val && val[0]) || {},
-        inv: (inv && inv[0]) || {},
-        fc: fc || [],
-        sales: (sales || []).slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) })),
-        bom: (bom || []).map((b) => ({ ...b, mat: matMap[(b.component || "").toUpperCase().trim()] || {} })),
+        seg: seg[0] || {},
+        val: val[0] || {},
+        inv: inv[0] || {},
+        fc: fc,
+        sales: sales.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) })),
+        bom: bom.map((b) => ({ ...b, mat: matMap[(b.component || "").toUpperCase().trim()] || {} })),
       };
     } catch (e) {
       error = e.message;
@@ -92,25 +106,37 @@ export default async function DeepDive({ searchParams }) {
           </div>
 
           <section className="kpi-grid">
-            <div className="card">
-              <div className="kpi-label">Revenue (12 mo)</div>
-              <div className="kpi-value">{rp(detail.val.value_12m)}</div>
-              <div className="kpi-sub">{fmt(detail.seg.qty_12m)} units</div>
+            <div className="card kpi-card">
+              <div className="kpi-icon accent"><IconDollarSign /></div>
+              <div>
+                <div className="kpi-label">Revenue (12 mo)</div>
+                <div className="kpi-value">{rp(detail.val.value_12m)}</div>
+                <div className="kpi-sub">{fmt(detail.seg.qty_12m)} units</div>
+              </div>
             </div>
-            <div className="card">
-              <div className="kpi-label">Stock on Hand</div>
-              <div className="kpi-value">{fmt(detail.inv.soh_qty)}</div>
-              <div className="kpi-sub">DOI {detail.inv.doi_days == null ? "—" : detail.inv.doi_days + " d"}</div>
+            <div className="card kpi-card">
+              <div className="kpi-icon green"><IconPackage /></div>
+              <div>
+                <div className="kpi-label">Stock on Hand</div>
+                <div className="kpi-value">{fmt(detail.inv.soh_qty)}</div>
+                <div className="kpi-sub">DOI {detail.inv.doi_days == null ? "—" : detail.inv.doi_days + " d"}</div>
+              </div>
             </div>
-            <div className="card">
-              <div className="kpi-label">Avg Price</div>
-              <div className="kpi-value">{rp(detail.val.avg_price_idr)}</div>
-              <div className="kpi-sub">per unit</div>
+            <div className="card kpi-card">
+              <div className="kpi-icon amber"><IconTag /></div>
+              <div>
+                <div className="kpi-label">Avg Price</div>
+                <div className="kpi-value">{rp(detail.val.avg_price_idr)}</div>
+                <div className="kpi-sub">per unit</div>
+              </div>
             </div>
-            <div className="card">
-              <div className="kpi-label">Forecast (next mo)</div>
-              <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].forecast_qty) : "—"}</div>
-              <div className="kpi-sub">WMA</div>
+            <div className="card kpi-card">
+              <div className="kpi-icon muted"><IconTrendingUp /></div>
+              <div>
+                <div className="kpi-label">Forecast (next mo)</div>
+                <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].forecast_qty) : "—"}</div>
+                <div className="kpi-sub">WMA</div>
+              </div>
             </div>
           </section>
 
