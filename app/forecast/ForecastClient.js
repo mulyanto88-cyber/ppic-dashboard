@@ -41,16 +41,25 @@ function csvCell(v) {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-function exportCSV(list, months, segMap, valMap) {
-  const head = ["SKU", "Type", "ABC (value)", "XYZ", "Trend", "Champion Model", "Accuracy_%",
-    ...months.map(ym), "Total 3-mo"];
-  const rows = [...list].sort((a, b) => b.total12 - a.total12).map((x) => {
+function exportCSV(list, months, segMap, valMap, beInfo) {
+  const sorted = [...list].sort((a, b) => b.total12 - a.total12);
+  const histMonths = sorted.length ? sorted[0].series.slice(-4).map((p) => p.ym) : [];
+  const hasBE = !!(beInfo && beInfo.month);
+  const head = ["No", "SKU", "Type", "ABC (value)", "XYZ", "Trend", "Champion Model", "Accuracy_%",
+    ...histMonths.map((m) => "Actual " + ym(m)),
+    ...(hasBE ? ["BE " + ym(beInfo.month) + " (est)"] : []),
+    ...months.map((m) => "Forecast " + ym(m)), "Total 3-mo"];
+  const rows = sorted.map((x, idx) => {
     const sg = segMap[x.name] || {};
     const acc = x.champ.wmape === null ? "" : (100 - x.champ.wmape).toFixed(1);
     const f = x.fwd[x.champ.method];
     const tot3 = f.reduce((s, p) => s + p.q, 0);
-    return [x.name, sg.type || "", valMap[x.name] || "", sg.xyz_class || "", sg.trend || "",
-      METHODS[x.champ.method].label, acc, ...f.map((p) => p.q), tot3];
+    const beRow = hasBE ? beInfo.map[x.name] : null;
+    return [idx + 1, x.name, sg.type || "", valMap[x.name] || "", sg.xyz_class || "", sg.trend || "",
+      METHODS[x.champ.method].label, acc,
+      ...x.series.slice(-4).map((p) => p.q),
+      ...(hasBE ? [beRow && beRow.be_qty != null ? beRow.be_qty : ""] : []),
+      ...f.map((p) => p.q), tot3];
   });
   const csv = "﻿" + [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
   const stamp = new Date().toISOString().slice(0, 10);
@@ -61,7 +70,7 @@ function exportCSV(list, months, segMap, valMap) {
   URL.revokeObjectURL(url);
 }
 
-export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null }) {
+export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null, be = [] }) {
   const [tab, setTab] = useState("Overview");
   const { skus, months } = useMemo(() => computeModel(matrix), [matrix]);
   const segMap = useMemo(() => {
@@ -71,6 +80,15 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
   const valMap = useMemo(() => {
     const m = {}; for (const v of val) m[v.sku_name] = v.abc_tier_value; return m;
   }, [val]);
+  // Best Estimate bulan berjalan (July parsial -> proyeksi kurva mingguan bln lalu)
+  const beInfo = useMemo(() => {
+    const map = {};
+    for (const r of be) map[r.sku_name] = r;
+    const month = be.length ? be[0].month : null;
+    const progress = be.length ? Number(be[0].month_progress_pct) : null;
+    const total = be.reduce((s, r) => (skus[r.sku_name] ? s + Number(r.be_qty || 0) : s), 0);
+    return { map, month, progress, total };
+  }, [be, skus]);
 
   return (
     <>
@@ -82,7 +100,7 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
             {months.length ? " (" + months.map(ym).join(" · ") + ")" : ""} · Active FG
           </div>
         </div>
-        <button className="btn-export" onClick={() => exportCSV(Object.values(skus), months, segMap, valMap)}>
+        <button className="btn-export" onClick={() => exportCSV(Object.values(skus), months, segMap, valMap, beInfo)}>
           ↓ Download full forecast (all SKUs)
         </button>
       </div>
@@ -95,13 +113,35 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
         ))}
       </div>
 
-      {tab === "Overview" && <Overview skus={skus} months={months} segMap={segMap} ranked={ranked} meta={meta} />}
+      {tab === "Overview" && <Overview skus={skus} months={months} segMap={segMap} ranked={ranked} meta={meta} beInfo={beInfo} />}
       {tab === "Accuracy" && (
         <Accuracy skus={skus} segMap={segMap} ranked={ranked} months={months}
           meta={meta} live={live} liveDetail={liveDetail} liveErr={liveErr} />
       )}
       {tab === "Model Lab" && <ModelLab skus={skus} months={months} segMap={segMap} ranked={ranked} />}
     </>
+  );
+}
+
+// ---- Pagination (25 baris/halaman, nomor urut menerus) ------------------------
+const PER_PAGE = 25;
+
+function Pager({ page, pages, total, onPage }) {
+  if (pages <= 1) return null;
+  const start = page * PER_PAGE + 1;
+  const end = Math.min(total, (page + 1) * PER_PAGE);
+  return (
+    <div className="pager">
+      <span className="pager-info">{start}–{end} of {fmt(total)}</span>
+      <button className="gloss-pill" disabled={page === 0} onClick={() => onPage(page - 1)}>‹ Prev</button>
+      {pages <= 10 &&
+        Array.from({ length: pages }, (_, i) => (
+          <button key={i} className={"gloss-pill" + (i === page ? " active" : "")} onClick={() => onPage(i)}>
+            {i + 1}
+          </button>
+        ))}
+      <button className="gloss-pill" disabled={page === pages - 1} onClick={() => onPage(page + 1)}>Next ›</button>
+    </div>
   );
 }
 
@@ -152,7 +192,8 @@ function PublishBar({ meta }) {
 }
 
 // ============================ OVERVIEW =======================================
-function Overview({ skus, months, segMap, ranked, meta }) {
+function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
+  const [page, setPage] = useState(0);
   const list = Object.values(skus);
   let ae = 0, tot = 0;
   for (const x of list) { const b = x.methods[x.champ.method]; if (b) { ae += b.ae; tot += b.tot; } }
@@ -162,6 +203,18 @@ function Overview({ skus, months, segMap, ranked, meta }) {
     _lbl: ym(mo),
     total: list.reduce((s, x) => s + (x.fwd[x.champ.method][i]?.q || 0), 0),
   }));
+
+  // 4 bulan aktual LENGKAP terakhir (bulan berjalan parsial dikecualikan)
+  const histMonths = list.length ? list[0].series.slice(-4).map((p) => p.ym) : [];
+  const histTotals = histMonths.map((mo, i) => ({
+    _lbl: ym(mo),
+    total: list.reduce((s, x) => s + (x.series[x.series.length - 4 + i]?.q || 0), 0),
+    hist: true,
+  }));
+  // Best Estimate bulan berjalan di antara aktual & forecast
+  const hasBE = !!(beInfo && beInfo.month && beInfo.total > 0);
+  const beBar = hasBE ? [{ _lbl: ym(beInfo.month) + "*", total: beInfo.total, be: true }] : [];
+  const chartData = [...histTotals, ...beBar, ...totalByMonth];
 
   const mix = {};
   for (const x of list) mix[x.champ.method] = (mix[x.champ.method] || 0) + 1;
@@ -174,7 +227,11 @@ function Overview({ skus, months, segMap, ranked, meta }) {
     .sort((a, b) => b.total12 - a.total12)
     .map((x) => ({ sku_name: x.name, abc_tier_value: null }));
   const rows = [...ranked, ...extras];
-  const maxBar = Math.max(1, ...totalByMonth.map((d) => d.total));
+  const maxBar = Math.max(1, ...chartData.map((d) => d.total));
+
+  const pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  const cur = Math.min(page, pages - 1);
+  const pageRows = rows.slice(cur * PER_PAGE, cur * PER_PAGE + PER_PAGE);
 
   return (
     <>
@@ -204,44 +261,90 @@ function Overview({ skus, months, segMap, ranked, meta }) {
       </section>
 
       <div className="card">
-        <h2 className="card-title">Total Forecast by Month</h2>
-        <div className="card-note">total units · all SKUs · each SKU on its own champion model</div>
+        <h2 className="card-title">Total Actual vs Forecast by Month</h2>
+        <div className="card-note">
+          total units · all SKUs · last {histMonths.length} complete actual months
+          {hasBE ? ` · ${ym(beInfo.month)}* = Best Estimate (month-to-date ÷ ${pct(beInfo.progress)} progress, mirrored from last month's weekly curve — payday-aware)` : ""}
+          {" "}· next {months.length} forecast months (champion each)
+        </div>
         <div className="barchart">
-          {totalByMonth.map((d, i) => (
+          {chartData.map((d, i) => (
             <div className="bar-col" key={i}>
               <div className="bar-val">{fmt(d.total)}</div>
-              <div className="bar hl" style={{ height: (d.total / maxBar) * 100 + "%" }} />
+              <div className={"bar" + (d.hist ? "" : d.be ? " be" : " hl")} style={{ height: (d.total / maxBar) * 100 + "%" }} />
               <div className="bar-label">{d._lbl}</div>
             </div>
           ))}
+        </div>
+        <div className="legend">
+          <span className="lg-accent">Actual sales</span>
+          {hasBE && <span className="lg-amber">Best Estimate (in progress)</span>}
+          <span className="lg-green">Forecast (champion)</span>
         </div>
       </div>
 
       <div className="card">
         <h2 className="card-title">Forecast by SKU — All Active SKUs ({fmt(rows.length)})</h2>
-        <div className="card-note">every Continue SKU with sales history · sorted by revenue · champion model each · accuracy = 100 − backtest wMAPE</div>
+        <div className="card-note">
+          every Continue SKU with sales history · sorted by revenue · last {histMonths.length} actual months
+          {hasBE ? ` + ${ym(beInfo.month)} BE* (best estimate, ${pct(beInfo.progress)} month progress)` : ""}
+          {" "}· accuracy = 100 − backtest wMAPE · {PER_PAGE} rows per page
+        </div>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>SKU</th><th>ABC</th><th>Trend</th><th>Champion</th>
+                <th rowSpan={2}>#</th>
+                <th rowSpan={2}>SKU</th>
+                <th rowSpan={2}>ABC</th>
+                <th rowSpan={2}>Trend</th>
+                <th rowSpan={2}>Champion</th>
+                {histMonths.length > 0 && (
+                  <th colSpan={histMonths.length} style={{ textAlign: "center", color: "var(--text-dim)" }}>
+                    Actual Sales
+                  </th>
+                )}
+                {hasBE && (
+                  <th rowSpan={2} className="num" style={{ color: "var(--amber)" }}>
+                    {ym(beInfo.month)} BE*
+                  </th>
+                )}
+                <th colSpan={months.length} style={{ textAlign: "center", color: "var(--accent)" }}>
+                  Forecast
+                </th>
+                <th rowSpan={2} className="num">Accuracy</th>
+              </tr>
+              <tr>
+                {histMonths.map((m) => <th className="num" key={"h" + m}>{ym(m)}</th>)}
                 {months.map((m) => <th className="num" key={m}>{ym(m)}</th>)}
-                <th className="num">Accuracy</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((v, i) => {
+              {pageRows.map((v, i) => {
                 const x = skus[v.sku_name];
                 const sg = segMap[v.sku_name] || {};
                 const acc = x.champ.wmape === null ? null : 100 - x.champ.wmape;
                 const f = x.fwd[x.champ.method];
+                const hist4 = x.series.slice(-4);
                 return (
-                  <tr key={i}>
+                  <tr key={v.sku_name}>
+                    <td className="num" style={{ color: "var(--muted)" }}>{cur * PER_PAGE + i + 1}</td>
                     <td className="name">{v.sku_name}</td>
                     <td><span className={"badge abc-" + String(v.abc_tier_value || "").toLowerCase()}>{v.abc_tier_value || "—"}</span></td>
                     <td><span className={"badge " + trendClass(sg.trend)}>{sg.trend || "—"}</span></td>
                     <td><span className="badge champ">{METHODS[x.champ.method].label}</span></td>
-                    {f.map((p, j) => <td className="num" key={j}>{fmt(p.q)}</td>)}
+                    {hist4.map((p, j) => (
+                      <td className="num" key={"h" + j} style={{ color: "var(--text-dim)" }}>{fmt(p.q)}</td>
+                    ))}
+                    {hasBE && (
+                      <td className="num" style={{ color: "var(--amber)" }}>
+                        {beInfo.map[v.sku_name] && beInfo.map[v.sku_name].be_qty != null
+                          ? fmt(beInfo.map[v.sku_name].be_qty) : "—"}
+                      </td>
+                    )}
+                    {f.map((p, j) => (
+                      <td className="num" key={j} style={{ fontWeight: 650 }}>{fmt(p.q)}</td>
+                    ))}
                     <td className="num" style={accColor(acc)}>{acc === null ? "—" : pct(acc)}</td>
                   </tr>
                 );
@@ -249,6 +352,7 @@ function Overview({ skus, months, segMap, ranked, meta }) {
             </tbody>
           </table>
         </div>
+        <Pager page={cur} pages={pages} total={rows.length} onPage={setPage} />
       </div>
     </>
   );
@@ -360,6 +464,7 @@ function LivePerformance({ live, liveDetail, liveErr, meta, months }) {
 
 // ============================ ACCURACY =======================================
 function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = [], liveErr = null }) {
+  const [page, setPage] = useState(0);
   const list = Object.values(skus);
 
   const methodAgg = useMemo(() => METHOD_KEYS.map((m) => {
@@ -392,6 +497,9 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
       .sort((a, b) => b.total12 - a.total12)
       .map((x) => ({ sku_name: x.name, abc_tier_value: null })),
   ];
+  const pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  const cur = Math.min(page, pages - 1);
+  const pageRows = rows.slice(cur * PER_PAGE, cur * PER_PAGE + PER_PAGE);
 
   return (
     <>
@@ -472,19 +580,20 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
 
       <div className="card">
         <h2 className="card-title">Accuracy by SKU — All Active SKUs ({fmt(rows.length)})</h2>
-        <div className="card-note">per-SKU champion backtest · sorted by revenue</div>
+        <div className="card-note">per-SKU champion backtest · sorted by revenue · {PER_PAGE} rows per page</div>
         <div className="table-wrap">
           <table className="table">
             <thead>
-              <tr><th>SKU</th><th>ABC</th><th>XYZ</th><th>Champion</th><th className="num">wMAPE</th><th className="num">Accuracy</th></tr>
+              <tr><th>#</th><th>SKU</th><th>ABC</th><th>XYZ</th><th>Champion</th><th className="num">wMAPE</th><th className="num">Accuracy</th></tr>
             </thead>
             <tbody>
-              {rows.map((v, i) => {
+              {pageRows.map((v, i) => {
                 const x = skus[v.sku_name];
                 const sg = segMap[v.sku_name] || {};
                 const acc = x.champ.wmape === null ? null : 100 - x.champ.wmape;
                 return (
-                  <tr key={i}>
+                  <tr key={v.sku_name}>
+                    <td className="num" style={{ color: "var(--muted)" }}>{cur * PER_PAGE + i + 1}</td>
                     <td className="name">{v.sku_name}</td>
                     <td><span className={"badge abc-" + String(v.abc_tier_value || "").toLowerCase()}>{v.abc_tier_value || "—"}</span></td>
                     <td><span className={"badge xyz-" + trendClass(sg.xyz_class)}>{sg.xyz_class || "—"}</span></td>
@@ -497,6 +606,7 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
             </tbody>
           </table>
         </div>
+        <Pager page={cur} pages={pages} total={rows.length} onPage={setPage} />
       </div>
     </>
   );

@@ -32,6 +32,15 @@ export default async function Forecast() {
     liveErr = e.message;
   }
 
+  // Best Estimate bulan berjalan (0031) — terpisah juga; tanpa view ini kolom
+  // BE hanya tidak muncul, halaman tetap jalan.
+  let be = [];
+  try {
+    be = (await sb("v_current_month_be?select=sku_name,month,qty_to_date,month_progress_pct,be_qty")) || [];
+  } catch (e) {
+    be = [];
+  }
+
   if (error) {
     return (
       <div className="card error">
@@ -45,7 +54,7 @@ export default async function Forecast() {
   return (
     <ForecastClient
       matrix={matrix} seg={seg} val={val} meta={meta}
-      live={live} liveDetail={liveDetail} liveErr={liveErr}
+      live={live} liveDetail={liveDetail} liveErr={liveErr} be={be}
     />
   );
 }
