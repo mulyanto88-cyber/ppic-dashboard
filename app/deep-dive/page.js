@@ -1,6 +1,7 @@
 import { sb } from "../../lib/supabase";
 import { fmt, rp, ym } from "../../lib/format";
 import SkuPicker from "./SkuPicker";
+import { seriesFromMatrix, champion, forecastForward, METHODS } from "../../lib/forecast";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ export default async function DeepDive({ searchParams }) {
         sb(`v_sku_segmentation?sku_name=ilike.${enc}`),
         sb(`v_sku_value?sku_name=ilike.${enc}`),
         sb(`v_inventory_fg?sku_name=ilike.${enc}`),
-        sb(`v_forecast_monthly?sku_name=ilike.${enc}&order=forecast_month.asc`),
+        sb(`v_sku_monthly_matrix?sku_name=ilike.${enc}`),
         sb(`sales_monthly?select=month,qty_delivered&sku_name=ilike.${enc}&order=month.asc`),
         sb(`bom?select=component,per_pcs&product=ilike.${enc}&order=component.asc`),
         sb(`v_mrp?select=component,uom,weeks_cover,status`),
@@ -55,11 +56,22 @@ export default async function DeepDive({ searchParams }) {
       const seg = getVal(results[0]);
       const val = getVal(results[1]);
       const inv = getVal(results[2]);
-      const fc = getVal(results[3]);
+      const matrix = getVal(results[3]);
       const sales = getVal(results[4]);
       const bom = getVal(results[5]);
       const mrp = getVal(results[6]);
       const stock = getVal(results[7]);
+
+      const cleanSeriesMap = seriesFromMatrix(matrix);
+      const cleanSeries = Object.values(cleanSeriesMap)[0] || [];
+
+      let champMethod = "wma";
+      let champForecast = [];
+      if (cleanSeries.length >= 4) {
+        const champ = champion(cleanSeries);
+        champMethod = champ.method;
+        champForecast = forecastForward(cleanSeries, champMethod, { h: 3, skipCurrent: true });
+      }
 
       const matMap = {};
       for (const m of mrp) matMap[(m.component || "").toUpperCase().trim()] = m;
@@ -71,7 +83,8 @@ export default async function DeepDive({ searchParams }) {
         seg: seg[0] || {},
         val: val[0] || {},
         inv: inv[0] || {},
-        fc: fc,
+        fc: champForecast,
+        champMethod,
         sales: sales.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) })),
         bom: bom.map((b) => {
           const key = (b.component || "").toUpperCase().trim();
@@ -143,12 +156,12 @@ export default async function DeepDive({ searchParams }) {
                 <div className="kpi-sub">per unit</div>
               </div>
             </div>
-            <div className="card kpi-card">
+             <div className="card kpi-card">
               <div className="kpi-icon muted"><IconTrendingUp /></div>
               <div>
                 <div className="kpi-label">Forecast (next mo)</div>
-                <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].forecast_qty) : "—"}</div>
-                <div className="kpi-sub">WMA</div>
+                <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].q) : "—"}</div>
+                <div className="kpi-sub">{METHODS[detail.champMethod].label}</div>
               </div>
             </div>
           </section>
@@ -162,13 +175,13 @@ export default async function DeepDive({ searchParams }) {
             </div>
             <div className="card">
               <h2 className="card-title">Forecast — 3 Months</h2>
-              <div className="card-note">WMA (0.6 / 0.3 / 0.1)</div>
+              <div className="card-note">Champion: {METHODS[detail.champMethod].label}</div>
               <div className="table-wrap">
                 <table className="table">
                   <thead><tr><th>Month</th><th className="num">Forecast</th></tr></thead>
                   <tbody>
                     {detail.fc.map((r, i) => (
-                      <tr key={i}><td>{ym(r.forecast_month)}</td><td className="num">{fmt(r.forecast_qty)}</td></tr>
+                      <tr key={i}><td>{ym(r.ym)}</td><td className="num">{fmt(r.q)}</td></tr>
                     ))}
                     {detail.fc.length === 0 && <tr><td colSpan={2} style={{ color: "var(--muted)" }}>No forecast.</td></tr>}
                   </tbody>

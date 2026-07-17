@@ -21,6 +21,8 @@ export default async function Schedule() {
   const hasData = results.some(r => r.status === "fulfilled");
   if (!hasData) {
     error = "Database connection failed or returned no data.";
+  } else if (plan.length === 0) {
+    error = "No production plan rows. Check that v_mps_plan (migrations 0027–0028) is live and demand (baseline or run-rate) exists.";
   }
 
   if (error) {
