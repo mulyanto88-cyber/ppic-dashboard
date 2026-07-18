@@ -247,6 +247,24 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     return out;
   }, [latestSohDate]);
 
+  const weekGroups = useMemo(() => {
+    const groups = {};
+    days.forEach((d, idx) => {
+      groups[d.week] = groups[d.week] || { count: 0, first: idx };
+      groups[d.week].count++;
+    });
+    return Object.keys(groups).map(wKey => {
+      const wVal = Number(wKey);
+      const ds = days.filter((d) => d.week === wVal);
+      const range = ds.length ? dmon(ds[0].iso) + " – " + dmon(ds[ds.length - 1].iso) : "";
+      return {
+        week: wVal,
+        colSpan: groups[wVal].count,
+        range
+      };
+    });
+  }, [days]);
+
   // Jadwal harian 2 minggu — DUA strategi:
   const daily = useMemo(() => {
     const nD = days.length;
@@ -433,22 +451,6 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
   const cur = Math.min(page, pages - 1);
   const pageRows = tableRows.slice(cur * PER, cur * PER + PER);
   const src = plan[0]?.demand_source || "—";
-
-  const weekGroups = useMemo(() => {
-    const groups = {};
-    days.forEach((d, idx) => {
-      groups[d.week] = groups[d.week] || { count: 0, first: idx };
-      groups[d.week].count++;
-    });
-    return Object.keys(groups).map(wKey => {
-      const wVal = Number(wKey);
-      return {
-        week: wVal,
-        colSpan: groups[wVal].count,
-        range: weekRange(wVal)
-      };
-    });
-  }, [days]);
 
   function exportCSV() {
     const stamp = new Date().toISOString().slice(0, 10);
