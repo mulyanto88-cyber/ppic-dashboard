@@ -116,10 +116,11 @@ const formatCapRange = (line, wcap) => {
   return wcap ? fmt((wcap * 3) / WEEK_SHIFTS) : "—";
 };
 
-export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatrix = [] }) {
+export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatrix = [], latestSohDate }) {
   const [page, setPage] = useState(0);
   const [mode, setMode] = useState("weekly");     // "weekly" | "daily"
   const [strategy, setStrategy] = useState("level"); // daily: "level" (rata harian) | "front" (urgensi)
+  const [filterRmpm, setFilterRmpm] = useState(true);
 
   const patternMap = useMemo(() => {
     const m = {}; for (const r of pattern) m[Number(r.week_of_month)] = Number(r.factor); return m;
@@ -153,17 +154,18 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
   }, [bomMatrix]);
   const hasMatGate = bomMatrix.length > 0;
 
-  // Horizon minggu (mulai Senin minggu berjalan)
+  // Horizon minggu (mulai Senin minggu SOH terakhir)
   const weeks = useMemo(() => {
-    const start = mondayOf(new Date());
+    const start = mondayOf(new Date(latestSohDate || new Date()));
     return Array.from({ length: HORIZON }, (_, i) => {
       const ws = new Date(start); ws.setUTCDate(start.getUTCDate() + i * 7);
       const wom = Math.min(5, Math.max(1, Math.ceil(ws.getUTCDate() / 7)));
       return { iso: ws.toISOString().slice(0, 10), wom, factor: patternMap[wom] ?? 1 };
     });
-  }, [patternMap]);
+  }, [patternMap, latestSohDate]);
 
   // Simulasi (s,S) per SKU + agregasi beban per line (mingguan)
+  // Diurutkan berdasarkan cover terkecil (priority tertinggi)
   const { rows, lineLoad, kpi } = useMemo(() => {
     const rows = [];
     const lineLoad = {};                       // line -> [w]: unit produksi
@@ -188,7 +190,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
         cells.forEach((c, i) => { L[i] += c.prod; });
       }
     }
-    rows.sort((a, b) => b.total - a.total);
+    rows.sort((a, b) => {
+      const coverA = Number(a.weekly_demand) > 0 ? (Number(a.soh) || 0) / Number(a.weekly_demand) : Infinity;
+      const coverB = Number(b.weekly_demand) > 0 ? (Number(b.soh) || 0) / Number(b.weekly_demand) : Infinity;
+      return coverA - coverB || b.total - a.total;
+    });
 
     let overCells = 0;
     for (const L in lineLoad) {
@@ -206,34 +212,46 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
   }, [plan]);
 
   // ---- MODE DAILY: hari kerja 2 minggu (Sen–Sab, Minggu libur) ----------------
+  // Dimulai dari hari setelah tanggal SOH terakhir
   const days = useMemo(() => {
-    const start = mondayOf(new Date());
+    if (!latestSohDate) return [];
     const out = [];
-    for (let i = 0; i < DAILY_WEEKS * 7; i++) {
-      const d = new Date(start); d.setUTCDate(start.getUTCDate() + i);
-      const dow = d.getUTCDay();
-      if (dow === 0) continue;                 // Minggu libur
-      out.push({
-        iso: d.toISOString().slice(0, 10),
-        dow, shifts: DAY_SHIFTS[dow],
-        week: i < 7 ? 0 : 1,
-        lbl: DOW[dow] + " " + d.getUTCDate(),
-      });
+    const baseMonday = mondayOf(new Date(latestSohDate)); // Monday of SOH week
+    
+    // Start production on the day after SOH date
+    const startProd = new Date(latestSohDate);
+    startProd.setUTCDate(startProd.getUTCDate() + 1);
+    
+    let current = new Date(startProd);
+    let workingDaysFound = 0;
+    
+    // Generate exactly 12 working days (2 weeks of production)
+    while (workingDaysFound < 12) {
+      const dow = current.getUTCDay();
+      if (dow !== 0) { // skip Sunday
+        const dayMonday = mondayOf(current);
+        const diffMs = dayMonday.getTime() - baseMonday.getTime();
+        const weekIdx = Math.floor(diffMs / (7 * 24 * 3600 * 1000));
+        
+        out.push({
+          iso: current.toISOString().slice(0, 10),
+          dow,
+          shifts: DAY_SHIFTS[dow],
+          week: weekIdx, // week index for bucket mapping (0, 1, 2)
+          lbl: DOW[dow] + " " + current.getUTCDate(),
+        });
+        workingDaysFound++;
+      }
+      current.setUTCDate(current.getUTCDate() + 1);
     }
     return out;
-  }, []);
+  }, [latestSohDate]);
 
   // Jadwal harian 2 minggu — DUA strategi:
-  //  "level" (default) = HEIJUNKA: total kebutuhan line disebar RATA per hari
-  //     (proporsional shift; Sabtu ½) → qty per hari/shift stabil, sisa kapasitas
-  //     per hari jelas (jendela OEM). SKU kritis tetap dapat slot paling awal.
-  //  "front" = urgensi: isi hari paling awal sampai penuh (pola lama).
-  // Keduanya patuh: kapasitas harian dinamis (CAPACITY_RULES per jumlah SKU),
-  // lot 500, maks 5 SKU/line/hari, dan MATERIAL GATE (pass A, urut prioritas).
   const daily = useMemo(() => {
     const nD = days.length;
     const w2start = days.findIndex((d) => d.week === 1);
-    const totalShiftW = days.reduce((s, d) => s + d.shifts, 0);   // 33
+    const totalShiftW = days.reduce((s, d) => s + d.shifts, 0);
     const load = {}; const skusOnDay = {};
     for (const L of lines) {
       load[L] = Array(nD).fill(0);
@@ -252,10 +270,9 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     const avail = {};
     for (const k in mat.pool) avail[k] = mat.pool[k].avail;
 
-    // Helper hitung kapasitas harian dinamis berbasis changeover SKU
     const getDailyCap = (line, dayIdx, numSkus) => {
       const rules = getRulesForLine(line);
-      const shifts = days[dayIdx].shifts; // 3 weekdays, 1.5 Saturday
+      const shifts = days[dayIdx].shifts;
       if (rules) {
         const n = Math.min(4, Math.max(1, numSkus));
         const target = shifts === 1.5 ? rules[n].half : rules[n].full;
@@ -265,7 +282,6 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       return wcap ? (wcap * shifts) / WEEK_SHIFTS : Infinity;
     };
 
-    // ---- PASS A: material gate (urut prioritas — material langka ke SKU kritis)
     const gated = prio.map((x) => {
       const comps = mat.bomMap[String(x.r.sku_name).toUpperCase().trim()] || [];
       let req1 = x.req1, req2 = x.req2, matShort = 0, limComp = null, limSoh = null, limInc = null;
@@ -280,14 +296,19 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
         }
       }
       const buildable = mx === Infinity ? Infinity : Math.max(0, Math.floor(mx / LOT) * LOT);
-      if (buildable < req1 + req2) {
+      if (filterRmpm && buildable < req1 + req2) {
+        matShort = req1 + req2;
+        limComp = lim ? mat.pool[lim.k].name : null;
+        limSoh = lim ? Math.max(0, Math.round(avail[lim.k])) : null;
+        limInc = lim ? mat.pool[lim.k].inc : null;
+        req1 = 0; req2 = 0;
+      } else if (buildable < req1 + req2) {
         matShort = req1 + req2 - buildable;
         limComp = lim ? mat.pool[lim.k].name : null;
         limSoh = lim ? Math.max(0, Math.round(avail[lim.k])) : null;
         limInc = lim ? mat.pool[lim.k].inc : null;
         const cut2 = Math.min(req2, matShort);
-        req2 -= cut2;
-        req1 -= matShort - cut2;
+        req2 -= cut2; req1 -= matShort - cut2;
       }
       const sched = req1 + req2;
       for (const c of comps) {
@@ -297,7 +318,6 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       return { x, req1, req2, matShort, limComp, limSoh, limInc };
     });
 
-    // ---- Target LEVEL per line per hari (share proporsional shift, lot 500) ---
     const levelCap = {};
     if (strategy === "level") {
       const lineReq = {};
@@ -323,18 +343,22 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     const list = [];
     let unfitTotal = 0, matShortTotal = 0;
 
-    // ---- PASS B: alokasi harian per SKU (urut prioritas) ----------------------
     for (const g of gated) {
       const { x, req1, req2, matShort, limComp, limSoh, limInc } = g;
       const line = x.r.prod_line;
       const hasCapModel = !!(getRulesForLine(line) || capMap[line]);
       const alloc = Array(nD).fill(0);
-      let unfit = 0;
+      let unfit = 0, spill = 0;
+
+      if (req1 + req2 === 0) {
+        unfitTotal += (x.req1 + x.req2);
+        matShortTotal += matShort;
+        list.push({ ...x.r, cover: x.cover, alloc: alloc.map((v) => Math.round(v)), total2: 0, spill: 0, unfit: x.req1 + x.req2, matShort, need2: x.req1 + x.req2, limComp, limSoh, limInc });
+        continue;
+      }
 
       if (!hasCapModel) {
-        // Assembly/Other (tanpa model kapasitas)
         if (strategy === "level") {
-          // sebar merata seluruh 12 hari (bobot shift, Sabtu ½), lot 500
           const req = req1 + req2;
           let cum = 0, given = 0;
           for (let i = 0; i < nD; i++) {
@@ -345,87 +369,86 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           }
           if (given < req) { alloc[nD - 1] += req - given; load[line][nD - 1] += req - given; }
         } else {
-          const spread = (req, from, to) => {
-            if (req <= 0) return;
-            const n = to - from + 1;
+          const weekIndices = {};
+          days.forEach((d, idx) => {
+            weekIndices[d.week] = weekIndices[d.week] || [];
+            weekIndices[d.week].push(idx);
+          });
+          const spreadForWeek = (req, weekVal) => {
+            const idxs = weekIndices[weekVal];
+            if (!idxs || idxs.length === 0 || req <= 0) return;
+            const n = idxs.length;
             const lots = Math.round(req / LOT);
             const base = Math.floor(lots / n), extra = lots % n;
-            for (let i = from; i <= to; i++) {
-              const v = (base + (i - from < extra ? 1 : 0)) * LOT;
+            for (let idx = 0; idx < n; idx++) {
+              const i = idxs[idx];
+              const v = (base + (idx < extra ? 1 : 0)) * LOT;
               alloc[i] += v; load[line][i] += v;
             }
           };
-          spread(req1, 0, w2start - 1);
-          spread(req2, w2start, nD - 1);
+          spreadForWeek(req1, 0); spreadForWeek(req2, 1);
         }
       } else {
-        const place = (reqIn, from, useLevel) => {
+        const place = (reqIn, from, weekVal) => {
           let req = reqIn;
           for (let i = from; i < nD && req > 0; i++) {
             const isNewSku = !skusOnDay[line][i].has(x.r.sku_name);
             if (isNewSku && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
             const nextSkuCount = skusOnDay[line][i].size + (isNewSku ? 1 : 0);
-
             const cap = getDailyCap(line, i, nextSkuCount);
             let free = cap - load[line][i];
-            if (useLevel && levelCap[line]) free = Math.min(free, levelCap[line][i] - load[line][i]);
+            if (strategy === "level" && levelCap[line]) free = Math.min(free, levelCap[line][i] - load[line][i]);
             const take = Math.min(req, Math.floor(free / LOT) * LOT);
             if (take <= 0) continue;
-
             alloc[i] += take; load[line][i] += take;
             if (isNewSku) skusOnDay[line][i].add(x.r.sku_name);
+            if (days[i].week > weekVal) spill += take;
             req -= take;
           }
           return req;
         };
         if (strategy === "level") {
-          // pass 1 patuh target level; pass 2 longgarkan level (tetap patuh kapasitas)
-          let left = place(req1 + req2, 0, true);
-          if (left > 0) left = place(left, 0, false);
+          let left = place(req1 + req2, 0, 0);
+          if (left > 0) left = place(left, 0, 1);
           unfit += left;
         } else {
-          unfit += place(req1, 0, false);
-          unfit += place(req2, w2start, false);
+          const weekStarts = {};
+          days.forEach((d, idx) => { if (!(d.week in weekStarts)) weekStarts[d.week] = idx; });
+          unfit += place(req1, weekStarts[0] ?? 0, 0);
+          if (weekStarts[1] != null) unfit += place(req2, weekStarts[1], 1);
         }
       }
-
-      // spill = bagian kebutuhan W1 yang terparkir di minggu-2
-      const week1Alloc = alloc.slice(0, w2start).reduce((s, v) => s + v, 0);
-      const spill = Math.max(0, Math.round(req1 - week1Alloc - unfit));
-
-      unfitTotal += unfit;
-      matShortTotal += matShort;
-      list.push({
-        ...x.r,
-        cover: x.cover,
-        alloc: alloc.map((v) => Math.round(v)),
-        total2: Math.round(alloc.reduce((s, v) => s + v, 0)),
-        spill,
-        unfit: Math.round(unfit),
-        matShort: Math.round(matShort),
-        need2: x.req1 + x.req2,
-        limComp, limSoh, limInc,
-      });
+      unfitTotal += unfit; matShortTotal += matShort;
+      list.push({ ...x.r, cover: x.cover, alloc: alloc.map((v) => Math.round(v)), total2: Math.round(alloc.reduce((s, v) => s + v, 0)), spill: Math.round(spill), unfit: Math.round(unfit), matShort: Math.round(matShort), need2: x.req1 + x.req2, limComp, limSoh, limInc });
     }
-
     const dayTotals = Array(nD).fill(0);
     for (const L of Object.keys(load)) load[L].forEach((v, i) => { dayTotals[i] += v; });
-
     const total = list.reduce((s, r) => s + r.total2, 0);
-    const spillSkus = list.filter((r) => r.spill > 0).length;
-    return {
-      list, load, w2start, dayTotals, skusOnDay,
-      kpi: { skus: list.length, total, unfit: Math.round(unfitTotal), matShort: Math.round(matShortTotal), spillSkus },
-    };
-  }, [rows, days, capMap, lines, mat, strategy]);
+    return { list, load, dayTotals, skusOnDay, kpi: { skus: list.filter(r => r.total2 > 0).length, total, unfit: Math.round(unfitTotal), matShort: Math.round(matShortTotal), spillSkus: list.filter((r) => r.spill > 0).length } };
+  }, [rows, days, capMap, lines, mat, strategy, filterRmpm]);
 
-  // ---- pagination (dipakai dua mode) -----------------------------------------
   const tableRows = mode === "daily" ? daily.list : rows;
   const PER = 25;
   const pages = Math.max(1, Math.ceil(tableRows.length / PER));
   const cur = Math.min(page, pages - 1);
   const pageRows = tableRows.slice(cur * PER, cur * PER + PER);
   const src = plan[0]?.demand_source || "—";
+
+  const weekGroups = useMemo(() => {
+    const groups = {};
+    days.forEach((d, idx) => {
+      groups[d.week] = groups[d.week] || { count: 0, first: idx };
+      groups[d.week].count++;
+    });
+    return Object.keys(groups).map(wKey => {
+      const wVal = Number(wKey);
+      return {
+        week: wVal,
+        colSpan: groups[wVal].count,
+        range: weekRange(wVal)
+      };
+    });
+  }, [days]);
 
   function exportCSV() {
     const stamp = new Date().toISOString().slice(0, 10);
@@ -499,6 +522,16 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
               title="Urgensi maksimum: hari paling awal diisi penuh dulu">
               ⚡ Front-load · urgency
             </button>
+            
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", marginLeft: "15px", cursor: "pointer", color: filterRmpm ? "var(--accent)" : "var(--text-muted)", fontWeight: filterRmpm ? "bold" : "normal" }}>
+              <input
+                type="checkbox"
+                checked={filterRmpm}
+                onChange={(e) => { setFilterRmpm(e.target.checked); setPage(0); }}
+                style={{ cursor: "pointer" }}
+              />
+              🔒 Hanya SKU dengan RMPM Cukup (100%)
+            </label>
           </>
         )}
       </div>
@@ -631,8 +664,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
                 <tr>
                   <th rowSpan={2}>Production Line</th>
                   <th rowSpan={2} className="num">Cap/day</th>
-                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
-                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                  {weekGroups.map((g, idx) => (
+                    <th key={g.week} colSpan={g.colSpan} style={{ textAlign: "center" }}>
+                      Week {idx + 1} · {g.range}
+                    </th>
+                  ))}
                 </tr>
                 <tr>
                   {days.map((d) => (
@@ -690,8 +726,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
               <thead>
                 <tr>
                   <th rowSpan={2}>Production Line</th>
-                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
-                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                  {weekGroups.map((g, idx) => (
+                    <th key={g.week} colSpan={g.colSpan} style={{ textAlign: "center" }}>
+                      Week {idx + 1} · {g.range}
+                    </th>
+                  ))}
                 </tr>
                 <tr>
                   {days.map((d) => <th className="num" key={d.iso}>{d.lbl}{d.shifts === 1.5 ? " ½" : ""}</th>)}
@@ -787,8 +826,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
               <thead>
                 <tr>
                   <th rowSpan={2}>Shift</th>
-                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
-                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                  {weekGroups.map((g, idx) => (
+                    <th key={g.week} colSpan={g.colSpan} style={{ textAlign: "center" }}>
+                      Week {idx + 1} · {g.range}
+                    </th>
+                  ))}
                 </tr>
                 <tr>
                   {days.map((d) => <th className="num" key={d.iso}>{d.lbl}{d.shifts === 1.5 ? " ½" : ""}</th>)}
@@ -840,8 +882,11 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
                 <tr>
                   <th rowSpan={2}>#</th><th rowSpan={2}>SKU</th><th rowSpan={2}>Line</th><th rowSpan={2}>ABC</th>
                   <th rowSpan={2} className="num">Cover</th>
-                  <th colSpan={daily.w2start} style={{ textAlign: "center" }}>Week 1 · {weekRange(0)}</th>
-                  <th colSpan={days.length - daily.w2start} style={{ textAlign: "center" }}>Week 2 · {weekRange(1)}</th>
+                  {weekGroups.map((g, idx) => (
+                    <th key={g.week} colSpan={g.colSpan} style={{ textAlign: "center" }}>
+                      Week {idx + 1} · {g.range}
+                    </th>
+                  ))}
                   <th rowSpan={2} className="num">Total</th>
                 </tr>
                 <tr>
