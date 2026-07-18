@@ -1,4 +1,4 @@
-import { sb } from "../../../lib/supabase";
+import { sbAll } from "../../../lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +12,10 @@ const ALLOWED = {
   v_mps_plan: "mps_plan",
   v_mrp: "mrp_materials",
   v_stock_position: "stock_position",
+  v_po_calendar: "po_calendar",
+  v_po_pipeline: "po_pipeline",
+  v_po_gap: "po_gap_no_po",
+  v_po_forceclosed: "po_forceclosed",
 };
 
 function toCsv(rows) {
@@ -33,7 +37,7 @@ export async function GET(request) {
     return new Response("Invalid or non-exportable view", { status: 400 });
   }
   try {
-    const rows = await sb(`${view}?select=*`);
+    const rows = await sbAll(`${view}?select=*`); // paginasi: view besar (v_stock_position 1.4rb baris) tak terpotong 1000
     const csv = "﻿" + toCsv(rows); // BOM supaya Excel baca UTF-8 dengan benar
     const stamp = new Date().toISOString().slice(0, 10);
     return new Response(csv, {

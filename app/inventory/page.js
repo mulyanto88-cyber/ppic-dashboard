@@ -1,4 +1,4 @@
-import { sb } from "../../lib/supabase";
+import { sb, sbAll } from "../../lib/supabase";
 import InventoryClient from "./InventoryClient";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export default async function InventoryHealth() {
     sb("v_inventory_by_movement?select=*"),
     sb("v_mps_cover?select=*&order=weeks_of_cover.asc"),
     sb("v_inventory_fg?select=*&order=soh_value_est.desc"),
-    sb("v_stock_position?select=*&order=total_position.desc"),
+    sbAll("v_stock_position?select=*&order=total_position.desc"), // 1.428 baris > limit 1000 → wajib paginasi
     sb("product_master?select=sku_name,status"),
     sb("v_sku_value?select=sku_name,avg_price_idr"),
   ]);

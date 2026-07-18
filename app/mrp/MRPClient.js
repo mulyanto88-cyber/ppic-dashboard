@@ -16,7 +16,21 @@ function q(val, uom) {
   return fmt(val) + (uom ? " " + uom : "");
 }
 
-export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) {
+// PO Calendar helpers
+const BUCKET_STYLE = {
+  Overdue: { background: "var(--red-soft)", color: "var(--red)" },
+  "This Week": { background: "var(--amber-soft)", color: "var(--amber)" },
+  "Next Week": { background: "var(--accent-soft)", color: "var(--accent)" },
+};
+const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dshort = (dstr) => {
+  const d = new Date(dstr);
+  if (isNaN(d)) return dstr || "—";
+  return d.getUTCDate() + " " + MON3[d.getUTCMonth()];
+};
+
+export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSupplyModeAction }) {
+  const [viewMode, setViewMode] = useState("requirements"); // "requirements" | "calendar"
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(0);
@@ -86,6 +100,12 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
   const curPage = Math.min(page, pages - 1);
   const pageRows = sortedRows.slice(curPage * PER, curPage * PER + PER);
 
+  // PO Calendar pagination (urutan sudah by release_in_weeks dari view)
+  const [calPage, setCalPage] = useState(0);
+  const calPages = Math.max(1, Math.ceil(poCalendar.length / PER));
+  const curCalPage = Math.min(calPage, calPages - 1);
+  const calPageRows = poCalendar.slice(curCalPage * PER, curCalPage * PER + PER);
+
   const handleUpdateMode = async (component, newMode) => {
     setEditingComp(component);
     startTransition(async () => {
@@ -113,10 +133,19 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
         <div>
           <h1 className="page-title">MRP — Material Requirements</h1>
           <div className="page-sub">
-            FG demand × BOM → weekly material consumption vs stock position · min stock 45 days
+            {viewMode === "calendar"
+              ? "time-phased: WHEN each PO must be released · per-material lead time & safety stock (Material Master) · 8-week horizon"
+              : "FG demand × BOM → weekly material consumption vs stock position · per-material target = lead time + safety stock days"}
           </div>
         </div>
-        <a className="btn-export" href="/api/export?view=v_mrp&limit=10000">↓ Export CSV</a>
+        <a className="btn-export" href={viewMode === "calendar" ? "/api/export?view=v_po_calendar" : "/api/export?view=v_mrp"}>↓ Export CSV</a>
+      </div>
+
+      <div className="gloss-tabs">
+        <button className={"gloss-pill" + (viewMode === "requirements" ? " active" : "")}
+          onClick={() => setViewMode("requirements")}>📋 Order Requirements</button>
+        <button className={"gloss-pill" + (viewMode === "calendar" ? " active" : "")}
+          onClick={() => setViewMode("calendar")}>📅 PO Calendar{poCalendar.length ? ` (${poCalendar.length})` : ""}</button>
       </div>
 
       <section className="kpi-grid">
@@ -133,7 +162,7 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
           <div>
             <div className="kpi-label">Critical</div>
             <div className="kpi-value" style={{ color: kpi.critical > 0 ? "var(--red)" : "var(--green)" }}>{fmt(kpi.critical)}</div>
-            <div className="kpi-sub">&lt; 2 weeks cover (≈ lead time)</div>
+            <div className="kpi-sub">cover &lt; lead time (per material)</div>
           </div>
         </div>
         <div className="card kpi-card" style={{ borderColor: kpi.below_min > 0 ? "var(--amber)" : undefined }}>
@@ -141,7 +170,7 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
           <div>
             <div className="kpi-label">Below Min</div>
             <div className="kpi-value" style={{ color: "var(--amber)" }}>{fmt(kpi.below_min)}</div>
-            <div className="kpi-sub">&lt; 45-day stock</div>
+            <div className="kpi-sub">cover &lt; lead time + safety days</div>
           </div>
         </div>
         <div className="card kpi-card">
@@ -154,6 +183,7 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
         </div>
       </section>
 
+      {viewMode === "requirements" && (<>
       <div className="card" style={{ marginBottom: "1rem" }}>
         <div className="gloss-filter-row" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
           <div className="search-box" style={{ position: "relative", flex: 1, minWidth: "240px" }}>
@@ -180,7 +210,7 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
       <div className="card">
         <h2 className="card-title">Material Requirements — Order Priority</h2>
         <div className="card-note">
-          net requirement = 45-day target − stock position (SOH + PO incoming + MO WIP) · gram shown as kg · click headers to sort · change supply mode override via dropdown
+          net requirement = (lead time + safety days) target − stock position (SOH + PO incoming + MO WIP), min MOQ · per-material params from Material Master · gram shown as kg · click headers to sort · change supply mode via dropdown
         </div>
         <div className="table-wrap">
           <table className="table">
@@ -287,6 +317,71 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
           </div>
         )}
       </div>
+      </>)}
+
+      {viewMode === "calendar" && (
+        <div className="card">
+          <h2 className="card-title">PO Release Calendar — next 8 weeks</h2>
+          <div className="card-note">
+            WHEN each PO must be RELEASED so stock never dips below safety level · release = (week stock hits safety) − lead time ·
+            Overdue = should already be on order · suggested qty respects MOQ · gram shown as kg
+          </div>
+          {poCalendar.length === 0 ? (
+            <div className="gloss-empty">No releases due in the next 8 weeks — or run migration 0042 (v_po_calendar) in Supabase.</div>
+          ) : (
+            <>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Release</th>
+                      <th>Material</th>
+                      <th>Vendor</th>
+                      <th>Source</th>
+                      <th className="num">Use/wk</th>
+                      <th className="num">Cover</th>
+                      <th className="num">Release Date</th>
+                      <th className="num">Arrives ≈</th>
+                      <th className="num">Suggested Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calPageRows.map((r, i) => (
+                      <tr key={i}>
+                        <td><span className="badge" style={BUCKET_STYLE[r.bucket] || {}}>{r.bucket}</span></td>
+                        <td className="name">
+                          <div>{r.component}</div>
+                          <div style={{ fontSize: "10.5px", color: "var(--muted)", marginTop: "2px" }}>
+                            LT: {r.lead_time_days}d{Number(r.moq) > 0 ? ` | MOQ: ${fmt(r.moq)}` : ""}
+                          </div>
+                        </td>
+                        <td className="name">{r.vendor || "—"}</td>
+                        <td><span className={"badge " + (r.source_type === "import" ? "declining" : "method")}>{r.source_type}</span></td>
+                        <td className="num">{q(r.weekly_consumption, r.uom)}</td>
+                        <td className="num" style={{ color: Number(r.release_in_weeks) < 0 ? "var(--red)" : undefined }}>
+                          {r.weeks_cover} wk
+                        </td>
+                        <td className="num" style={Number(r.release_in_weeks) < 0 ? { color: "var(--red)", fontWeight: 700 } : {}}>
+                          {Number(r.release_in_weeks) < 0 ? "NOW" : dshort(r.release_date)}
+                        </td>
+                        <td className="num">{dshort(r.arrival_date)}</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{q(r.suggested_qty, r.uom)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {calPages > 1 && (
+                <div className="pager">
+                  <span className="pager-info">{curCalPage * PER + 1}–{Math.min(poCalendar.length, curCalPage * PER + PER)} of {fmt(poCalendar.length)}</span>
+                  <button className="gloss-pill" disabled={curCalPage === 0} onClick={() => setCalPage(curCalPage - 1)}>‹ Prev</button>
+                  <button className="gloss-pill" disabled={curCalPage === calPages - 1} onClick={() => setCalPage(curCalPage + 1)}>Next ›</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </>
   );
 }

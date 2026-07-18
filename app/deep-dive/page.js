@@ -1,4 +1,4 @@
-import { sb } from "../../lib/supabase";
+import { sb, sbAll } from "../../lib/supabase";
 import DeepDiveClient from "./DeepDiveClient";
 import {
   saveSkuMaster,
@@ -23,7 +23,7 @@ export default async function DeepDive({ searchParams }) {
     const [listRes, masterRes, materialRes] = await Promise.all([
       sb("v_sku_segmentation?select=sku_name&order=qty_12m.desc"),
       sb("product_master?select=*&order=sku_name.asc"),
-      sb("material_master?select=*&order=material_name.asc")
+      sbAll("material_master?select=*&order=material_name.asc") // 1.030 baris > limit 1000
     ]);
 
     const fgs = (listRes || []).map((r) => ({ name: r.sku_name, type: "FG" }));
@@ -58,7 +58,7 @@ export default async function DeepDive({ searchParams }) {
           sb(`sales_monthly?select=month,qty_delivered&sku_name=ilike.${enc}&order=month.asc`),
           sb(`bom?select=component,per_pcs&product=ilike.${enc}&order=component.asc`),
           sb(`v_mrp?select=component,uom,weeks_cover,status`),
-          sb(`v_stock_position?select=product,uom,soh,po_incoming`),
+          sbAll(`v_stock_position?select=product,uom,soh,po_incoming`), // >1000 baris — tanpa paginasi, stok komponen BOM bisa hilang acak
         ]);
         const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
         const seg = getVal(results[0]);
