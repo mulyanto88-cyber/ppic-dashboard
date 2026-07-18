@@ -71,7 +71,7 @@ export default function POMonitoringClient({ kpi, pipeline, gap, vendors, forcec
           <h1 className="page-title">PO Monitoring</h1>
           <div className="page-sub">
             source: purchase.order (Odoo){snapshotDate ? " · snapshot " + snapshotDate : ""} · open = status
-            &quot;purchase&quot; with outstanding · value & dates per line
+            &quot;purchase&quot; with outstanding · showing POs from the last 12 months (full history stays in DB)
           </div>
         </div>
         <a className="btn-export" href="/api/export?view=v_po_pipeline">↓ Export CSV</a>
