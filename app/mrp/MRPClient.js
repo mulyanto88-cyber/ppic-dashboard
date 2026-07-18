@@ -200,14 +200,24 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
             </thead>
             <tbody>
               {pageRows.map((r, i) => {
+                const lt = Number(r.lead_time_days) || 14;
+                const ss = Number(r.safety_stock_days) || 30;
+                const limitCritical = lt / 7.0;
+                const limitBelowMin = (lt + ss) / 7.0;
+
                 const isEditing = editingComp === r.component;
                 const weeklyConsumption = Number(r.weekly_consumption) || 0;
                 const sohCover = weeklyConsumption > 0 ? (Number(r.soh) || 0) / weeklyConsumption : Infinity;
-                const isSohCritical = sohCover < 2 && r.status !== "Consignment" && r.status !== "Daily";
+                const isSohCritical = sohCover < limitCritical && r.status !== "Consignment" && r.status !== "Daily";
 
                 return (
                   <tr key={i} style={isEditing ? { opacity: 0.5 } : {}}>
-                    <td className="name">{r.component}</td>
+                    <td className="name">
+                      <div>{r.component}</div>
+                      <div style={{ fontSize: "10.5px", color: "var(--muted)", fontWeight: "normal", marginTop: "2px" }}>
+                        LT: {lt}d | SS: {ss}d{Number(r.moq) > 0 ? ` | MOQ: ${fmt(r.moq)}` : ""}
+                      </div>
+                    </td>
                     <td className="name">{r.vendor}</td>
                     <td className="num">{q(r.weekly_consumption, r.uom)}</td>
                     <td className="num">
@@ -224,7 +234,7 @@ export default function MRPClient({ initialRows, kpi, updateSupplyModeAction }) 
                     <td className="num">{q(r.po_incoming, r.uom)}</td>
                     <td className="num">{q(r.mo_wip, r.uom)}</td>
                     <td className="num">{q(r.total_position, r.uom)}</td>
-                    <td className="num" style={{ color: Number(r.weeks_cover) < 2 ? "var(--red)" : Number(r.weeks_cover) < 6.43 ? "var(--amber)" : "var(--green)" }}>
+                    <td className="num" style={{ color: Number(r.weeks_cover) < limitCritical ? "var(--red)" : Number(r.weeks_cover) < limitBelowMin ? "var(--amber)" : "var(--green)" }}>
                       {r.weeks_cover == null ? "—" : r.weeks_cover}
                     </td>
                     <td className="num" style={{ fontWeight: 700 }}>

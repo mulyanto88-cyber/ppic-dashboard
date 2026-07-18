@@ -265,11 +265,10 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     });
   }, [days]);
 
-  // Jadwal harian 2 minggu — DUA strategi:
-  const daily = useMemo(() => {
+  // Jadwal harian 2 minggu  const daily = useMemo(() => {
     const nD = days.length;
     const w2start = days.findIndex((d) => d.week === 1);
-    const totalShiftW = days.reduce((s, d) => s + d.shifts, 0);
+    const w2idx = w2start >= 0 ? w2start : nD;
     const load = {}; const skusOnDay = {};
     for (const L of lines) {
       load[L] = Array(nD).fill(0);
@@ -288,18 +287,20 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     const avail = {};
     for (const k in mat.pool) avail[k] = mat.pool[k].avail;
 
+    // Helper hitung kapasitas harian dinamis berbasis changeover SKU
     const getDailyCap = (line, dayIdx, numSkus) => {
       const rules = getRulesForLine(line);
-      const shifts = days[dayIdx].shifts;
+      const shifts = days[dayIdx].shifts; // 3 weekdays, 1.5 Saturday
       if (rules) {
         const n = Math.min(4, Math.max(1, numSkus));
         const target = shifts === 1.5 ? rules[n].half : rules[n].full;
-        return 3 * target;
+        return shifts * target; // Capped to actual shifts on that day!
       }
       const wcap = capMap[line];
       return wcap ? (wcap * shifts) / WEEK_SHIFTS : Infinity;
     };
 
+    // ---- PASS A: material gate (urut prioritas — material langka ke SKU kritis)
     const gated = prio.map((x) => {
       const comps = mat.bomMap[String(x.r.sku_name).toUpperCase().trim()] || [];
       let req1 = x.req1, req2 = x.req2, matShort = 0, limComp = null, limSoh = null, limInc = null;
@@ -314,6 +315,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
         }
       }
       const buildable = mx === Infinity ? Infinity : Math.max(0, Math.floor(mx / LOT) * LOT);
+      
       if (filterRmpm && buildable < req1 + req2) {
         matShort = req1 + req2;
         limComp = lim ? mat.pool[lim.k].name : null;
@@ -336,25 +338,58 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
       return { x, req1, req2, matShort, limComp, limSoh, limInc };
     });
 
-    const levelCap = {};
+    const levelCapMap = {};
     if (strategy === "level") {
-      const lineReq = {};
+      const lineReq1 = {};
+      const lineReq2 = {};
       for (const g of gated) {
         const L = g.x.r.prod_line;
-        lineReq[L] = (lineReq[L] || 0) + g.req1 + g.req2;
+        lineReq1[L] = (lineReq1[L] || 0) + g.req1;
+        lineReq2[L] = (lineReq2[L] || 0) + g.req2;
       }
-      for (const L in lineReq) {
-        const tot = lineReq[L];
+      
+      const w1Days = [];
+      const w2Days = [];
+      days.forEach((d, idx) => {
+        if (d.week === 0) w1Days.push(idx);
+        else w2Days.push(idx);
+      });
+      const shiftW1 = w1Days.reduce((s, idx) => s + days[idx].shifts, 0);
+      const shiftW2 = w2Days.reduce((s, idx) => s + days[idx].shifts, 0);
+
+      for (const L of lines) {
         const arr = Array(nD).fill(0);
-        let cum = 0, given = 0;
-        for (let i = 0; i < nD; i++) {
-          cum += (tot * days[i].shifts) / totalShiftW;
-          const want = Math.round(cum / LOT) * LOT;
-          arr[i] = Math.max(0, want - given);
-          given += arr[i];
+        
+        // Week 1 leveling
+        const tot1 = lineReq1[L] || 0;
+        if (tot1 > 0 && shiftW1 > 0) {
+          let cum = 0, given = 0;
+          w1Days.forEach((idx) => {
+            cum += (tot1 * days[idx].shifts) / shiftW1;
+            const want = Math.round(cum / LOT) * LOT;
+            arr[idx] = Math.max(0, want - given);
+            given += arr[idx];
+          });
+          if (given < tot1 && w1Days.length > 0) {
+            arr[w1Days[w1Days.length - 1]] += tot1 - given;
+          }
         }
-        if (given < tot) arr[nD - 1] += tot - given;
-        levelCap[L] = arr;
+        
+        // Week 2+ leveling
+        const tot2 = lineReq2[L] || 0;
+        if (tot2 > 0 && shiftW2 > 0) {
+          let cum = 0, given = 0;
+          w2Days.forEach((idx) => {
+            cum += (tot2 * days[idx].shifts) / shiftW2;
+            const want = Math.round(cum / LOT) * LOT;
+            arr[idx] = Math.max(0, want - given);
+            given += arr[idx];
+          });
+          if (given < tot2 && w2Days.length > 0) {
+            arr[w2Days[w2Days.length - 1]] += tot2 - given;
+          }
+        }
+        levelCapMap[L] = arr;
       }
     }
 
@@ -377,15 +412,44 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
 
       if (!hasCapModel) {
         if (strategy === "level") {
-          const req = req1 + req2;
-          let cum = 0, given = 0;
-          for (let i = 0; i < nD; i++) {
-            cum += (req * days[i].shifts) / totalShiftW;
-            const want = Math.round(cum / LOT) * LOT;
-            const v = Math.max(0, want - given); given += v;
-            alloc[i] += v; load[line][i] += v;
+          const w1Days = [];
+          const w2Days = [];
+          days.forEach((d, idx) => {
+            if (d.week === 0) w1Days.push(idx);
+            else w2Days.push(idx);
+          });
+          const shiftW1 = w1Days.reduce((s, idx) => s + days[idx].shifts, 0);
+          const shiftW2 = w2Days.reduce((s, idx) => s + days[idx].shifts, 0);
+
+          // Spread req1 across Week 1
+          if (req1 > 0 && shiftW1 > 0) {
+            let cum = 0, given = 0;
+            w1Days.forEach((idx) => {
+              cum += (req1 * days[idx].shifts) / shiftW1;
+              const want = Math.round(cum / LOT) * LOT;
+              const v = Math.max(0, want - given); given += v;
+              alloc[idx] += v; load[line][idx] += v;
+            });
+            if (given < req1) {
+              const lastIdx = w1Days[w1Days.length - 1];
+              alloc[lastIdx] += req1 - given; load[line][lastIdx] += req1 - given;
+            }
           }
-          if (given < req) { alloc[nD - 1] += req - given; load[line][nD - 1] += req - given; }
+
+          // Spread req2 across Week 2+
+          if (req2 > 0 && shiftW2 > 0) {
+            let cum = 0, given = 0;
+            w2Days.forEach((idx) => {
+              cum += (req2 * days[idx].shifts) / shiftW2;
+              const want = Math.round(cum / LOT) * LOT;
+              const v = Math.max(0, want - given); given += v;
+              alloc[idx] += v; load[line][idx] += v;
+            });
+            if (given < req2) {
+              const lastIdx = w2Days[w2Days.length - 1];
+              alloc[lastIdx] += req2 - given; load[line][lastIdx] += req2 - given;
+            }
+          }
         } else {
           const weekIndices = {};
           days.forEach((d, idx) => {
@@ -407,17 +471,21 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           spreadForWeek(req1, 0); spreadForWeek(req2, 1);
         }
       } else {
-        const place = (reqIn, from, weekVal) => {
+        const place = (reqIn, from, to, useLevel, weekVal) => {
           let req = reqIn;
-          for (let i = from; i < nD && req > 0; i++) {
+          for (let i = from; i <= to && req > 0; i++) {
             const isNewSku = !skusOnDay[line][i].has(x.r.sku_name);
             if (isNewSku && skusOnDay[line][i].size >= MAX_SKU_PER_LINE_DAY) continue;
             const nextSkuCount = skusOnDay[line][i].size + (isNewSku ? 1 : 0);
+
             const cap = getDailyCap(line, i, nextSkuCount);
             let free = cap - load[line][i];
-            if (strategy === "level" && levelCap[line]) free = Math.min(free, levelCap[line][i] - load[line][i]);
+            if (useLevel && levelCapMap[line]) {
+              free = Math.min(free, levelCapMap[line][i] - load[line][i]);
+            }
             const take = Math.min(req, Math.floor(free / LOT) * LOT);
             if (take <= 0) continue;
+
             alloc[i] += take; load[line][i] += take;
             if (isNewSku) skusOnDay[line][i].add(x.r.sku_name);
             if (days[i].week > weekVal) spill += take;
@@ -425,22 +493,33 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           }
           return req;
         };
+
         if (strategy === "level") {
-          let left = place(req1 + req2, 0, 0);
-          if (left > 0) left = place(left, 0, 1);
-          unfit += left;
+          // Week 1: strict target, then relaxed target in Week 1, then spill to Week 2
+          let left1 = place(req1, 0, w2idx - 1, true, 0);
+          if (left1 > 0) left1 = place(left1, 0, w2idx - 1, false, 0);
+          if (left1 > 0) left1 = place(left1, w2idx, nD - 1, false, 0);
+          
+          // Week 2: strict target, then relaxed target in Week 2
+          let left2 = place(req2, w2idx, nD - 1, true, 1);
+          if (left2 > 0) left2 = place(left2, w2idx, nD - 1, false, 1);
+          
+          unfit += left1 + left2;
         } else {
           const weekStarts = {};
           days.forEach((d, idx) => { if (!(d.week in weekStarts)) weekStarts[d.week] = idx; });
-          unfit += place(req1, weekStarts[0] ?? 0, 0);
-          if (weekStarts[1] != null) unfit += place(req2, weekStarts[1], 1);
+          unfit += place(req1, weekStarts[0] ?? 0, nD - 1, false, 0);
+          if (weekStarts[1] != null) unfit += place(req2, weekStarts[1], nD - 1, false, 1);
         }
       }
+
       unfitTotal += unfit; matShortTotal += matShort;
       list.push({ ...x.r, cover: x.cover, alloc: alloc.map((v) => Math.round(v)), total2: Math.round(alloc.reduce((s, v) => s + v, 0)), spill: Math.round(spill), unfit: Math.round(unfit), matShort: Math.round(matShort), need2: x.req1 + x.req2, limComp, limSoh, limInc });
     }
+
     const dayTotals = Array(nD).fill(0);
     for (const L of Object.keys(load)) load[L].forEach((v, i) => { dayTotals[i] += v; });
+
     const total = list.reduce((s, r) => s + r.total2, 0);
     return { list, load, dayTotals, skusOnDay, kpi: { skus: list.filter(r => r.total2 > 0).length, total, unfit: Math.round(unfitTotal), matShort: Math.round(matShortTotal), spillSkus: list.filter((r) => r.spill > 0).length } };
   }, [rows, days, capMap, lines, mat, strategy, filterRmpm]);
@@ -695,7 +774,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
                         if (rules) {
                           const n = Math.min(4, Math.max(1, numSkus || 1));
                           const target = days[i].shifts === 1.5 ? rules[n].half : rules[n].full;
-                          capD = 3 * target;
+                          capD = days[i].shifts * target;
                         } else if (wcap) {
                           capD = (wcap * days[i].shifts) / WEEK_SHIFTS;
                         }
@@ -751,7 +830,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
                         if (rules) {
                           const n = Math.min(4, Math.max(1, numSkus || 1));
                           const target = d.shifts === 1.5 ? rules[n].half : rules[n].full;
-                          capD = 3 * target;
+                          capD = d.shifts * target;
                         } else if (capMap[L]) {
                           capD = (capMap[L] * d.shifts) / WEEK_SHIFTS;
                         }
