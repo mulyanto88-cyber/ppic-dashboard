@@ -265,7 +265,8 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
     });
   }, [days]);
 
-  // Jadwal harian 2 minggu  const daily = useMemo(() => {
+  // Jadwal harian 2 minggu
+  const daily = useMemo(() => {
     const nD = days.length;
     const w2start = days.findIndex((d) => d.week === 1);
     const w2idx = w2start >= 0 ? w2start : nD;
