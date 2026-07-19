@@ -1,6 +1,8 @@
 "use client";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { fmt, rp } from "../../lib/format";
+import Pager from "../Pager";
 
 const COVER_BADGE = {
   Critical: "declining",
@@ -84,9 +86,17 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
       .reduce((s, r) => s + Number(r.soh_value_est || 0), 0);
   }, [inv]);
 
+  const turns = useMemo(() => {
+    const totalQty12m = inv.reduce((s, r) => s + (Number(r.qty_12m) || 0), 0);
+    const totalSoh = inv.reduce((s, r) => s + (Number(r.soh_qty) || 0), 0);
+    if (!totalQty12m || !totalSoh) return null;
+    return Math.round((totalQty12m / totalSoh) * 10) / 10;
+  }, [inv]);
+
   // FG Search, Filter & Sort states
   const [fgSearch, setFgSearch] = useState("");
   const [fgStatusFilter, setFgStatusFilter] = useState("ALL");
+  const [fgAbcFilter, setFgAbcFilter] = useState("ALL");
   const [fgPage, setFgPage] = useState(0);
   const [fgSortKey, setFgSortKey] = useState("soh_qty");
   const [fgSortOrder, setFgSortOrder] = useState("desc");
@@ -106,10 +116,11 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
       const nameMatch = (r.sku_name || "").toLowerCase().includes(fgSearch.toLowerCase()) ||
                         (r.type || "").toLowerCase().includes(fgSearch.toLowerCase());
       if (!nameMatch) return false;
-      if (fgStatusFilter === "ALL") return true;
-      return r.cover_status === fgStatusFilter;
+      if (fgStatusFilter !== "ALL" && r.cover_status !== fgStatusFilter) return false;
+      if (fgAbcFilter !== "ALL" && r.abc_tier !== fgAbcFilter) return false;
+      return true;
     });
-  }, [fgInventoryList, fgSearch, fgStatusFilter]);
+  }, [fgInventoryList, fgSearch, fgStatusFilter, fgAbcFilter]);
 
   const sortedFg = useMemo(() => {
     const list = [...filteredFg];
@@ -261,6 +272,16 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 <div className="kpi-sub">capital tied in slow/dead stock</div>
               </div>
             </div>
+            <div className="card kpi-card">
+              <div className="kpi-icon accent">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div>
+                <div className="kpi-label">Inventory Turns</div>
+                <div className="kpi-value">{turns != null ? turns + "×" : "—"}</div>
+                <div className="kpi-sub">12m sales / avg inventory</div>
+              </div>
+            </div>
           </section>
 
           <section className="grid-2">
@@ -318,7 +339,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 <tbody>
                   {atRisk.map((r, i) => (
                     <tr key={i}>
-                      <td className="name">{r.sku_name}</td>
+                      <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                       <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier}</span></td>
                       <td className="num">{fmt(r.soh)}</td>
                       <td className="num">{fmt(r.wk_run_rate)}</td>
@@ -342,7 +363,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 <tbody>
                   {slowDead.map((r, i) => (
                     <tr key={i}>
-                      <td className="name">{r.sku_name}</td>
+                      <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                       <td>{r.type}</td>
                       <td className="num">{fmt(r.soh_qty)}</td>
                       <td className="num">{rp(r.soh_value_est)}</td>
@@ -377,6 +398,12 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                   <button className={"gloss-pill growing" + (fgStatusFilter === "Healthy" ? " active" : "")} onClick={() => { setFgStatusFilter("Healthy"); setFgPage(0); }}>Healthy</button>
                   <button className={"gloss-pill na" + (fgStatusFilter === "Overstock" ? " active" : "")} onClick={() => { setFgStatusFilter("Overstock"); setFgPage(0); }}>Overstock</button>
                 </div>
+                <div className="gloss-tabs" style={{ margin: 0 }}>
+                  <button className={"gloss-pill" + (fgAbcFilter === "ALL" ? " active" : "")} onClick={() => { setFgAbcFilter("ALL"); setFgPage(0); }}>A+B+C</button>
+                  <button className={"gloss-pill abc-a" + (fgAbcFilter === "A" ? " active" : "")} onClick={() => { setFgAbcFilter("A"); setFgPage(0); }}>A</button>
+                  <button className={"gloss-pill abc-b" + (fgAbcFilter === "B" ? " active" : "")} onClick={() => { setFgAbcFilter("B"); setFgPage(0); }}>B</button>
+                  <button className={"gloss-pill abc-c" + (fgAbcFilter === "C" ? " active" : "")} onClick={() => { setFgAbcFilter("C"); setFgPage(0); }}>C</button>
+                </div>
               </div>
             </div>
             <div className="card-note">List of active finished goods items, their weeks of cover and DOI · click headers to sort</div>
@@ -399,7 +426,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                   {fgPageRows.map((r, i) => (
                     <tr key={i}>
                       <td className="num" style={{ color: "var(--muted)" }}>{curFgPage * PER_PAGE + i + 1}</td>
-                      <td className="name" style={{ fontWeight: 550 }}>{r.sku_name}</td>
+                      <td className="name" style={{ fontWeight: 550 }}><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                       <td>{r.type}</td>
                       <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier || "—"}</span></td>
                       <td className="num" style={{ fontWeight: 700 }}>{fmt(r.soh_qty)}</td>
@@ -417,13 +444,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 </tbody>
               </table>
             </div>
-            {fgPages > 1 && (
-              <div className="pager">
-                <span className="pager-info">{curFgPage * PER_PAGE + 1}–{Math.min(filteredFg.length, curFgPage * PER_PAGE + PER_PAGE)} of {fmt(filteredFg.length)}</span>
-                <button className="gloss-pill" disabled={curFgPage === 0} onClick={() => setFgPage(curFgPage - 1)}>‹ Prev</button>
-                <button className="gloss-pill" disabled={curFgPage === fgPages - 1} onClick={() => setFgPage(curFgPage + 1)}>Next ›</button>
-              </div>
-            )}
+            <Pager page={curFgPage} pages={fgPages} total={filteredFg.length} perPage={PER_PAGE} onPage={setFgPage} />
           </div>
 
           {fgStocks.disc.length > 0 && (
@@ -577,13 +598,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 </tbody>
               </table>
             </div>
-            {rmpmPages > 1 && (
-              <div className="pager">
-                <span className="pager-info">{curRmpmPage * PER_PAGE + 1}–{Math.min(filteredRmpm.length, curRmpmPage * PER_PAGE + PER_PAGE)} of {fmt(filteredRmpm.length)}</span>
-                <button className="gloss-pill" disabled={curRmpmPage === 0} onClick={() => setRmpmPage(curRmpmPage - 1)}>‹ Prev</button>
-                <button className="gloss-pill" disabled={curRmpmPage === rmpmPages - 1} onClick={() => setRmpmPage(curRmpmPage + 1)}>Next ›</button>
-              </div>
-            )}
+            <Pager page={curRmpmPage} pages={rmpmPages} total={filteredRmpm.length} perPage={PER_PAGE} onPage={setRmpmPage} />
           </div>
         </>
       )}

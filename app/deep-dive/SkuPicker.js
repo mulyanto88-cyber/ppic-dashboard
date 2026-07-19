@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 
 export default function SkuPicker({ items, current }) {
   const [q, setQ] = useState("");
@@ -19,7 +20,7 @@ export default function SkuPicker({ items, current }) {
       {matches.length > 0 && (
         <div className="sku-matches" style={{ zIndex: 10 }}>
           {matches.map((item) => (
-            <a 
+            <Link 
               key={item.name} 
               href={`/deep-dive?sku=${encodeURIComponent(item.name)}`} 
               className="sku-match"
@@ -29,7 +30,7 @@ export default function SkuPicker({ items, current }) {
               <span className={"badge " + (item.type === "FG" ? "growing" : "method")} style={{ fontSize: "10px", padding: "2px 6px" }}>
                 {item.type}
               </span>
-            </a>
+            </Link>
           ))}
         </div>
       )}

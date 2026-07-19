@@ -3,12 +3,16 @@ import { seriesFromMatrix, champion, forecastForward, METHODS } from "../../../.
 
 export const dynamic = "force-dynamic";
 
-// Publish baseline forecast RESMI: hitung champion per SKU dgn engine yang sama
-// spt tab Forecast, lalu simpan ke forecast_log bertanggal (run_date = hari ini).
-// Re-publish di hari yang sama menimpa run itu.
-export async function POST() {
+export async function POST(req) {
   try {
-    // matrix = 1 baris/SKU (hindari limit 1000 baris PostgREST pada deret flat)
+    const publishSecret = process.env.PUBLISH_SECRET;
+    if (publishSecret) {
+      const auth = req.headers.get("x-publish-key") || req.headers.get("authorization")?.replace("Bearer ", "");
+      if (auth !== publishSecret) {
+        return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     const rows = await sb("v_sku_monthly_matrix?select=sku_name,start_month,qtys");
     const map = seriesFromMatrix(rows);
     const runDate = new Date().toISOString().slice(0, 10);
@@ -33,11 +37,20 @@ export async function POST() {
       }
     }
 
-    // ganti run hari ini (idempotent), lalu insert
     await sbWrite(`forecast_log?run_date=eq.${runDate}`, null, { method: "DELETE" });
     if (out.length) await sbWrite("forecast_log", out, { prefer: "return=minimal" });
 
-    return Response.json({ ok: true, run_date: runDate, skus: out.length / 3, rows: out.length });
+    // Baseline drives v_fg_weekly_demand -> v_mrp (matview). Refresh so MRP/Schedule
+    // reflect the new baseline immediately. Non-fatal: baseline is already saved.
+    let refreshed = false;
+    try {
+      await sbWrite("rpc/refresh_all_materialized_views", {}, { prefer: "return=minimal" });
+      refreshed = true;
+    } catch (e) {
+      // matviews will still be refreshed by the next ETL run
+    }
+
+    return Response.json({ ok: true, run_date: runDate, skus: out.length / 3, rows: out.length, refreshed });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, error: e.message }), {
       status: 500,

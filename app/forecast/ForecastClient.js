@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fmt, ym, pct } from "../../lib/format";
+import Pager from "../Pager";
 import {
   METHODS, METHOD_KEYS, seriesFromMatrix, backtest, predictions, champion, forecastForward,
 } from "../../lib/forecast";
@@ -152,25 +153,6 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
 
 // ---- Pagination (25 baris/halaman, nomor urut menerus) ------------------------
 const PER_PAGE = 25;
-
-function Pager({ page, pages, total, onPage }) {
-  if (pages <= 1) return null;
-  const start = page * PER_PAGE + 1;
-  const end = Math.min(total, (page + 1) * PER_PAGE);
-  return (
-    <div className="pager">
-      <span className="pager-info">{start}–{end} of {fmt(total)}</span>
-      <button className="gloss-pill" disabled={page === 0} onClick={() => onPage(page - 1)}>‹ Prev</button>
-      {pages <= 10 &&
-        Array.from({ length: pages }, (_, i) => (
-          <button key={i} className={"gloss-pill" + (i === page ? " active" : "")} onClick={() => onPage(i)}>
-            {i + 1}
-          </button>
-        ))}
-      <button className="gloss-pill" disabled={page === pages - 1} onClick={() => onPage(page + 1)}>Next ›</button>
-    </div>
-  );
-}
 
 // ---- Publish official baseline (writes forecast_log via API) -----------------
 function PublishBar({ meta }) {
@@ -396,7 +378,7 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
             </tbody>
           </table>
         </div>
-        <Pager page={cur} pages={pages} total={rows.length} onPage={setPage} />
+        <Pager page={cur} pages={pages} total={rows.length} perPage={PER_PAGE} onPage={setPage} />
       </div>
     </>
   );
@@ -534,6 +516,22 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
     return { under, acc, over, t };
   }, [skus]);
 
+  const abcAccuracy = useMemo(() => {
+    const tiers = {};
+    for (const x of list) {
+      const sg = segMap[x.name] || {};
+      const tier = sg.abc_tier || "C";
+      if (!tiers[tier]) tiers[tier] = { ae: 0, tot: 0, n: 0 };
+      const b = x.methods[x.champ.method];
+      if (b && b.tot) { tiers[tier].ae += b.ae; tiers[tier].tot += b.tot; tiers[tier].n++; }
+    }
+    return ["A", "B", "C"].map((t) => ({
+      tier: t,
+      skus: tiers[t]?.n || 0,
+      wmape: tiers[t]?.tot > 0 ? Math.round((tiers[t].ae / tiers[t].tot) * 1000) / 10 : null,
+    })).filter((x) => x.skus > 0);
+  }, [skus, segMap]);
+
   const inRanked = new Set(ranked.map((v) => v.sku_name));
   const rows = [
     ...ranked,
@@ -594,9 +592,33 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
             “Champion of” = SKUs where this method wins per-SKU. The portfolio best method is bold, but each
             SKU still uses its own champion.
           </div>
-        </div>
+      </div>
 
-        <div className="card">
+      {abcAccuracy.length > 0 && (
+        <div className="card" style={{ marginTop: 18 }}>
+          <h2 className="card-title">Accuracy by ABC Tier (champion)</h2>
+          <div className="card-note">volume-weighted wMAPE per ABC tier — shows if forecasting is harder for C-class items</div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>ABC Tier</th><th className="num">SKUs</th><th className="num">wMAPE</th><th className="num">Accuracy</th></tr></thead>
+              <tbody>
+                {abcAccuracy.map((x) => (
+                  <tr key={x.tier}>
+                    <td><span className={"badge abc-" + x.tier.toLowerCase()}>{x.tier}</span></td>
+                    <td className="num">{fmt(x.skus)}</td>
+                    <td className="num">{x.wmape === null ? "—" : pct(x.wmape)}</td>
+                    <td className="num" style={accColor(x.wmape === null ? null : 100 - x.wmape)}>
+                      {x.wmape === null ? "—" : pct(100 - x.wmape)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
           <h2 className="card-title">Forecast Bias (champion)</h2>
           <div className="card-note">across all backtested SKU-months · ±10% band</div>
           <div className="bias-bar">
@@ -650,7 +672,7 @@ function Accuracy({ skus, segMap, ranked, months, meta, live = [], liveDetail = 
             </tbody>
           </table>
         </div>
-        <Pager page={cur} pages={pages} total={rows.length} onPage={setPage} />
+        <Pager page={cur} pages={pages} total={rows.length} perPage={PER_PAGE} onPage={setPage} />
       </div>
     </>
   );

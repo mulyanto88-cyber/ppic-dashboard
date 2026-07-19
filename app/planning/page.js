@@ -1,5 +1,6 @@
 import { sb } from "../../lib/supabase";
 import { fmt } from "../../lib/format";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -167,7 +168,7 @@ export default async function Planning() {
             <tbody>
               {plan.map((r, i) => (
                 <tr key={i}>
-                  <td className="name">{r.sku_name}</td>
+                  <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                   <td>{r.prod_line}</td>
                   <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier}</span></td>
                   <td className="num">{fmt(r.weekly_demand)}</td>

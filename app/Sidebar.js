@@ -1,5 +1,6 @@
 "use client";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { useState, useEffect } from "react";
 
 const NAV = [
@@ -11,10 +12,11 @@ const NAV = [
   { href: "/schedule", label: "Prod. Schedule" },
   { href: "/mrp", label: "MRP" },
   { href: "/deep-dive", label: "Deep Dive" },
+  { href: "/wip", label: "WIP Monitoring" },
   { href: "/glossary", label: "Glossary" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ freshness }) {
   const path = usePathname();
   const [theme, setTheme] = useState("dark");
 
@@ -33,6 +35,15 @@ export default function Sidebar() {
     }
   }
 
+  const timeAgo = (iso) => {
+    if (!iso) return "";
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return "baru saja";
+    if (diff < 3600) return Math.floor(diff / 60) + "m lalu";
+    if (diff < 86400) return Math.floor(diff / 3600) + "j lalu";
+    return Math.floor(diff / 86400) + "h lalu";
+  };
+
   return (
     <header className="navbar">
       <div className="brand">
@@ -42,14 +53,14 @@ export default function Sidebar() {
         {NAV.map((n) => {
           const active = !n.soon && n.href === path;
           return (
-            <a
+            <Link
               key={n.label}
               href={n.href}
               className={"nav-item" + (active ? " active" : "") + (n.soon ? " soon" : "")}
             >
               {n.label}
               {n.soon && <span className="tag-soon">soon</span>}
-            </a>
+            </Link>
           );
         })}
       </nav>
@@ -61,7 +72,14 @@ export default function Sidebar() {
       >
         {theme === "dark" ? "☀" : "🌙"}
       </button>
-      <div className="sidebar-foot">PT FOOM Lab Global</div>
+      <div className="sidebar-foot">
+        PT FOOM Lab Global
+        {freshness && (
+          <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: 4 }}>
+            Data: {freshness.snapshotDate || "—"} · {timeAgo(freshness.lastRun)}
+          </div>
+        )}
+      </div>
     </header>
   );
 }

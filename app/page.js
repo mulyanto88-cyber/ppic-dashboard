@@ -1,4 +1,5 @@
 import { sb } from "../lib/supabase";
+import Link from "next/link";
 import { fmt, rp, ym, dmon, pct } from "../lib/format";
 import ChartCombo from "./ChartCombo";
 import WeeklyBars from "./WeeklyBars";
@@ -214,7 +215,7 @@ export default async function DemandAnalytics() {
                 const rc = recentMap[r.sku_name] || {};
                 return (
                   <tr key={k}>
-                    <td className="name">{r.sku_name}</td>
+                    <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                     <td className="num">{rp(r.value_12m)}</td>
                     <td className="num">{fmt(rc.m3_qty)}</td>
                     <td className="num">{fmt(rc.m2_qty)}</td>
@@ -262,7 +263,7 @@ export default async function DemandAnalytics() {
               <tbody>
                 {watch.map((r, k) => (
                   <tr key={k}>
-                    <td className="name">{r.sku_name}</td>
+                    <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                     <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier}</span></td>
                     <td className="num">{fmt(r.qty_12m)}</td>
                     <td><span className={"badge " + String(r.trend || "").toLowerCase()}>{r.trend}</span></td>

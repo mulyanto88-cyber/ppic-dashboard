@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { fmt, dmon, pct } from "../../lib/format";
+import Pager from "../Pager";
 
 // ---- Parameter (tunable) -----------------------------------------------------
 const HORIZON = 8;   // minggu ke depan (mode Weekly)
@@ -1030,11 +1031,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           </table>
         </div>
         {pages > 1 && (
-          <div className="pager">
-            <span className="pager-info">{cur * PER + 1}–{Math.min(tableRows.length, cur * PER + PER)} of {fmt(tableRows.length)}</span>
-            <button className="gloss-pill" disabled={cur === 0} onClick={() => setPage(cur - 1)}>‹ Prev</button>
-            <button className="gloss-pill" disabled={cur === pages - 1} onClick={() => setPage(cur + 1)}>Next ›</button>
-          </div>
+          <Pager page={cur} pages={pages} total={tableRows.length} perPage={PER} onPage={setPage} />
         )}
       </div>
     </>

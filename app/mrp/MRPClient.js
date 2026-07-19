@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useMemo, useTransition } from "react";
+import Link from "next/link";
 import { fmt } from "../../lib/format";
+import Pager from "../Pager";
 
 const MRP_BADGE = {
   Critical: "declining",
@@ -49,9 +51,23 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
     setPage(0);
   };
 
+  // Enrich with material ABC classification (by weekly consumption)
+  const enrichedRows = useMemo(() => {
+    const sorted = [...initialRows].sort((a, b) =>
+      (Number(b.weekly_consumption) || 0) - (Number(a.weekly_consumption) || 0));
+    const totalConsumption = sorted.reduce((s, r) => s + (Number(r.weekly_consumption) || 0), 0);
+    let cum = 0;
+    for (const r of sorted) {
+      cum += (Number(r.weekly_consumption) || 0);
+      const pct = totalConsumption > 0 ? cum / totalConsumption : 0;
+      r._abc = pct <= 0.80 ? "A" : pct <= 0.95 ? "B" : "C";
+    }
+    return initialRows;
+  }, [initialRows]);
+
   // Filtered rows based on search and status
   const filteredRows = useMemo(() => {
-    return initialRows.filter((r) => {
+    return enrichedRows.filter((r) => {
       const nameMatch = (r.component || "").toLowerCase().includes(search.toLowerCase()) ||
                         (r.vendor || "").toLowerCase().includes(search.toLowerCase());
       
@@ -217,6 +233,7 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
             <thead>
               <tr>
                 <th onClick={() => handleSort("component")} style={{ cursor: "pointer", userSelect: "none" }}>Material{sortInd("component")}</th>
+                <th>ABC</th>
                 <th onClick={() => handleSort("vendor")} style={{ cursor: "pointer", userSelect: "none" }}>Vendor{sortInd("vendor")}</th>
                 <th className="num" onClick={() => handleSort("weekly_consumption")} style={{ cursor: "pointer", userSelect: "none" }}>Use/wk{sortInd("weekly_consumption")}</th>
                 <th className="num" onClick={() => handleSort("soh")} style={{ cursor: "pointer", userSelect: "none" }}>SOH{sortInd("soh")}</th>
@@ -243,11 +260,12 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
                 return (
                   <tr key={i} style={isEditing ? { opacity: 0.5 } : {}}>
                     <td className="name">
-                      <div>{r.component}</div>
+                      <div><Link href={`/deep-dive?sku=${encodeURIComponent(r.component)}`} style={{color:"inherit",textDecoration:"none"}}>{r.component}</Link></div>
                       <div style={{ fontSize: "10.5px", color: "var(--muted)", fontWeight: "normal", marginTop: "2px" }}>
                         LT: {lt}d | SS: {ss}d{Number(r.moq) > 0 ? ` | MOQ: ${fmt(r.moq)}` : ""}
                       </div>
                     </td>
+                    <td><span className={"badge " + (r._abc === "A" ? "declining" : r._abc === "B" ? "stable" : "na")}>{r._abc}</span></td>
                     <td className="name">{r.vendor}</td>
                     <td className="num">{q(r.weekly_consumption, r.uom)}</td>
                     <td className="num">
@@ -309,13 +327,7 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
             </tbody>
           </table>
         </div>
-        {pages > 1 && (
-          <div className="pager">
-            <span className="pager-info">{curPage * PER + 1}–{Math.min(sortedRows.length, curPage * PER + PER)} of {fmt(sortedRows.length)}</span>
-            <button className="gloss-pill" disabled={curPage === 0} onClick={() => setPage(curPage - 1)}>‹ Prev</button>
-            <button className="gloss-pill" disabled={curPage === pages - 1} onClick={() => setPage(curPage + 1)}>Next ›</button>
-          </div>
-        )}
+        <Pager page={curPage} pages={pages} total={sortedRows.length} perPage={PER} onPage={setPage} />
       </div>
       </>)}
 
@@ -350,7 +362,7 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
                       <tr key={i}>
                         <td><span className="badge" style={BUCKET_STYLE[r.bucket] || {}}>{r.bucket}</span></td>
                         <td className="name">
-                          <div>{r.component}</div>
+                          <div><Link href={`/deep-dive?sku=${encodeURIComponent(r.component)}`} style={{color:"inherit",textDecoration:"none"}}>{r.component}</Link></div>
                           <div style={{ fontSize: "10.5px", color: "var(--muted)", marginTop: "2px" }}>
                             LT: {r.lead_time_days}d{Number(r.moq) > 0 ? ` | MOQ: ${fmt(r.moq)}` : ""}
                           </div>
@@ -371,13 +383,7 @@ export default function MRPClient({ initialRows, kpi, poCalendar = [], updateSup
                   </tbody>
                 </table>
               </div>
-              {calPages > 1 && (
-                <div className="pager">
-                  <span className="pager-info">{curCalPage * PER + 1}–{Math.min(poCalendar.length, curCalPage * PER + PER)} of {fmt(poCalendar.length)}</span>
-                  <button className="gloss-pill" disabled={curCalPage === 0} onClick={() => setCalPage(curCalPage - 1)}>‹ Prev</button>
-                  <button className="gloss-pill" disabled={curCalPage === calPages - 1} onClick={() => setCalPage(curCalPage + 1)}>Next ›</button>
-                </div>
-              )}
+              <Pager page={curCalPage} pages={calPages} total={poCalendar.length} perPage={PER} onPage={setCalPage} />
             </>
           )}
         </div>
