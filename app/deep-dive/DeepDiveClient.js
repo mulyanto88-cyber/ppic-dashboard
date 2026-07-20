@@ -752,7 +752,7 @@ export default function DeepDiveClient({
                     <div className="card kpi-card">
                       <div className={"kpi-icon " + bufferIconColor}><IconShieldAlert /></div>
                       <div>
-                        <div className="kpi-label">Stock Buffer Status</div>
+                        <div className="kpi-label">Stock Cover</div>
                         <div className="kpi-value" style={{ fontSize: "22px" }}>{weeksCoverStr} <span style={{ fontSize: "12px", fontWeight: "normal", color: "var(--muted)" }}>cover</span></div>
                         <div className="kpi-sub" style={{ fontWeight: 600 }}>{coverStatusText}</div>
                       </div>
