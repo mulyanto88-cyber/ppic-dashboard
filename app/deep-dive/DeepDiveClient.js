@@ -20,13 +20,197 @@ function q(val, uom) {
 function Bars({ data, valueKey, labelKey }) {
   const max = Math.max(1, ...data.map((d) => Number(d[valueKey]) || 0));
   return (
-    <div className="barchart">
-      {data.map((d, i) => (
-        <div className="bar-col" key={i}>
-          <div className="bar hl" style={{ height: (Number(d[valueKey]) || 0) / max * 100 + "%", transition: "all 0.2s ease-in-out" }} />
-          <div className="bar-label">{d[labelKey]}</div>
+    <div className="barchart" style={{ paddingTop: "24px" }}>
+      {data.map((d, i) => {
+        const v = Number(d[valueKey]) || 0;
+        const pct = (v / max) * 100;
+        const formattedVal = fmt(v);
+        return (
+          <div 
+            className="bar-col" 
+            key={i}
+            title={`${d[labelKey]}: ${formattedVal} units`}
+            style={{ cursor: "pointer" }}
+          >
+            <div className="bar-val" style={{ fontSize: "10px", color: "var(--text-dim)", fontWeight: 600, marginBottom: "4px" }}>
+              {v > 0 ? formattedVal : "0"}
+            </div>
+            <div 
+              className="bar hl" 
+              style={{ height: Math.max(3, pct) + "%", transition: "all 0.2s ease-in-out" }} 
+            />
+            <div className="bar-label">{d[labelKey]}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProductionScheduleSimulator({ detail }) {
+  const mps = detail?.mpsPlan || {};
+  const soh = Number(detail?.inv?.soh_qty || mps.soh || 0);
+  const weeklyDemand = Number(mps.weekly_demand || (detail?.seg?.avg_monthly ? detail.seg.avg_monthly / 4.345 : 0));
+  const dailyDemand = weeklyDemand / 7;
+
+  const [targetDays, setTargetDays] = useState(30);
+  const [batchRounding, setBatchRounding] = useState(5000);
+
+  const minStockTarget = Math.round(dailyDemand * targetDays);
+  const isBelowMin = soh < minStockTarget;
+
+  // 8-week simulation
+  const simulationWeeks = useMemo(() => {
+    const weeks = [];
+    let currentStock = soh;
+    const batch = Math.max(1, batchRounding);
+
+    for (let w = 1; w <= 8; w++) {
+      const stockStart = currentStock;
+      const demand = Math.round(weeklyDemand);
+      const stockAfterDemand = stockStart - demand;
+      
+      let plannedMo = 0;
+      if (stockAfterDemand < minStockTarget) {
+        const need = minStockTarget - stockAfterDemand;
+        plannedMo = Math.ceil(need / batch) * batch;
+      }
+
+      const stockEnd = stockAfterDemand + plannedMo;
+      currentStock = stockEnd;
+
+      const woc = weeklyDemand > 0 ? (stockEnd / weeklyDemand).toFixed(1) : "—";
+      
+      let status = "Healthy";
+      let statusClass = "growing";
+      if (stockEnd < 0) {
+        status = "Critical (Stockout)";
+        statusClass = "declining";
+      } else if (stockEnd < minStockTarget) {
+        status = "Below Minimum";
+        statusClass = "stable";
+      }
+
+      weeks.push({
+        weekNum: w,
+        stockStart,
+        demand,
+        plannedMo,
+        stockEnd,
+        woc,
+        status,
+        statusClass
+      });
+    }
+    return weeks;
+  }, [soh, weeklyDemand, minStockTarget, batchRounding]);
+
+  const totalPlannedMo = simulationWeeks.reduce((sum, w) => sum + w.plannedMo, 0);
+  const firstMoWeek = simulationWeeks.find(w => w.plannedMo > 0)?.weekNum;
+
+  return (
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "10px" }}>
+        <div>
+          <h2 className="card-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span>⚙️</span> Simulasi Production Schedule &amp; Buffer (8 Minggu)
+          </h2>
+          <div className="card-note">
+            Perhitungan kebutuhan jadwal produksi mingguan (MPS) berdasarkan target safety stock &amp; kelipatan batch size.
+          </div>
         </div>
-      ))}
+        <div className="dd-badges">
+          <span className={"badge " + (isBelowMin ? "declining" : "growing")}>
+            {isBelowMin ? "⚠️ Below Stock Minimum" : "✅ Stock Healthy"}
+          </span>
+        </div>
+      </div>
+
+      {/* Control panel & KPI summary */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px", margin: "16px 0", background: "var(--surface)", padding: "14px", borderRadius: "10px", border: "1px solid var(--border)" }}>
+        <div>
+          <label style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600, display: "block", marginBottom: "6px" }}>
+            Target Buffer Stock (Hari): <b style={{ color: "var(--accent)" }}>{targetDays} Hari</b>
+          </label>
+          <input
+            type="range"
+            min="7"
+            max="90"
+            step="1"
+            value={targetDays}
+            onChange={(e) => setTargetDays(Number(e.target.value))}
+            style={{ width: "100%", accentColor: "var(--accent)" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--muted)" }}>
+            <span>7h</span>
+            <span>30h (Std)</span>
+            <span>60h</span>
+            <span>90h</span>
+          </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600, display: "block", marginBottom: "6px" }}>
+            Batch Size Rounding (Pcs):
+          </label>
+          <input
+            type="number"
+            min="500"
+            step="500"
+            value={batchRounding}
+            onChange={(e) => setBatchRounding(Math.max(1, Number(e.target.value)))}
+            style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--bg)", color: "inherit", fontSize: "13px" }}
+          />
+        </div>
+
+        <div>
+          <div style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Safety Stock Minimum Target</div>
+          <div style={{ fontSize: "18px", fontWeight: "bold", marginTop: "4px" }}>{fmt(minStockTarget)} <span style={{ fontSize: "12px", fontWeight: "normal", color: "var(--muted)" }}>pcs</span></div>
+          <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>Daily Demand: {fmt(Math.round(dailyDemand))} pcs/day</div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Total Rencana MO (8 Minggu)</div>
+          <div style={{ fontSize: "18px", fontWeight: "bold", color: totalPlannedMo > 0 ? "var(--amber, #f59e0b)" : "var(--green, #10b981)", marginTop: "4px" }}>
+            {fmt(totalPlannedMo)} <span style={{ fontSize: "12px", fontWeight: "normal", color: "var(--muted)" }}>pcs</span>
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>
+            {firstMoWeek ? `Minggu Rilis Pertama: W+${firstMoWeek}` : "Stok Aman (Tanpa MO)"}
+          </div>
+        </div>
+      </div>
+
+      {/* 8-Week Simulation Table */}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Minggu</th>
+              <th className="num">Stok Awal</th>
+              <th className="num">Est. Demand</th>
+              <th className="num" style={{ background: "rgba(59, 130, 246, 0.08)" }}>Rencana Produksi (MO)</th>
+              <th className="num">Stok Akhir</th>
+              <th className="num">Weeks Cover</th>
+              <th>Status Buffer</th>
+            </tr>
+          </thead>
+          <tbody>
+            {simulationWeeks.map((row) => (
+              <tr key={row.weekNum} style={row.plannedMo > 0 ? { background: "rgba(245, 158, 11, 0.05)" } : {}}>
+                <td style={{ fontWeight: 600 }}>W+{row.weekNum}</td>
+                <td className="num">{fmt(row.stockStart)}</td>
+                <td className="num">{fmt(row.demand)}</td>
+                <td className="num" style={{ fontWeight: row.plannedMo > 0 ? "bold" : "normal", color: row.plannedMo > 0 ? "var(--accent)" : "inherit", background: "rgba(59, 130, 246, 0.05)" }}>
+                  {row.plannedMo > 0 ? `+${fmt(row.plannedMo)}` : "—"}
+                </td>
+                <td className="num" style={{ fontWeight: "bold" }}>{fmt(row.stockEnd)}</td>
+                <td className="num">{row.woc} wks</td>
+                <td><span className={"badge " + row.statusClass}>{row.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -509,7 +693,8 @@ export default function DeepDiveClient({
                 <h2 className="card-title">{detail.seg.sku_name || currentSku}</h2>
                 <div className="card-note">Type: {detail.seg.type || "—"}</div>
                 <div className="dd-badges">
-                  {detail.seg.abc_tier && <span className={"badge abc-" + String(detail.seg.abc_tier).toLowerCase()}>ABC-qty {detail.seg.abc_tier}</span>}
+                  {detail.seg.status && <span className={"badge " + (detail.seg.status === "Discontinued" ? "dead" : "growing")}>{detail.seg.status}</span>}
+                  {detail.seg.abc_tier && detail.seg.abc_tier !== "—" && <span className={"badge abc-" + String(detail.seg.abc_tier).toLowerCase()}>ABC-qty {detail.seg.abc_tier}</span>}
                   {detail.val.abc_tier_value && <span className={"badge abc-" + String(detail.val.abc_tier_value).toLowerCase()}>ABC-value {detail.val.abc_tier_value}</span>}
                   {detail.seg.xyz_class && <span className={"badge xyz-" + String(detail.seg.xyz_class).toLowerCase()}>{detail.seg.xyz_class}</span>}
                   {detail.seg.movement_class && <span className={"badge " + String(detail.seg.movement_class).toLowerCase()}>{detail.seg.movement_class}</span>}
@@ -560,21 +745,44 @@ export default function DeepDiveClient({
                     : <div className="gloss-empty">No sales history.</div>}
                 </div>
                 <div className="card">
-                  <h2 className="card-title">Forecast — 3 Months</h2>
-                  <div className="card-note">Champion: {METHODS[detail.champMethod]?.label || "WMA"}</div>
+                  <h2 className="card-title">Forecast — 3 Months (3 Models)</h2>
+                  <div className="card-note">Evaluasi 3 Model: WMA, Linear Trend, &amp; Seasonal · Champion: <b>{METHODS[detail.champMethod]?.label || "WMA"}</b></div>
                   <div className="table-wrap">
                     <table className="table">
-                      <thead><tr><th>Month</th><th className="num">Forecast</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>Bulan</th>
+                          <th className="num">WMA</th>
+                          <th className="num">Linear Trend</th>
+                          <th className="num">Seasonal</th>
+                          <th className="num" style={{ background: "rgba(16, 185, 129, 0.1)", color: "var(--green)" }}>Champion ({METHODS[detail.champMethod]?.label})</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {detail.fc.map((r, i) => (
-                          <tr key={i}><td>{ym(r.ym)}</td><td className="num">{fmt(r.q)}</td></tr>
-                        ))}
-                        {detail.fc.length === 0 && <tr><td colSpan={2} style={{ color: "var(--muted)" }}>No forecast.</td></tr>}
+                        {detail.fc.map((r, i) => {
+                          const wmaQ = detail.modelFc?.wma?.[i]?.q ?? null;
+                          const trendQ = detail.modelFc?.trend?.[i]?.q ?? null;
+                          const seasonalQ = detail.modelFc?.seasonal?.[i]?.q ?? null;
+                          return (
+                            <tr key={i}>
+                              <td style={{ fontWeight: 600 }}>{ym(r.ym)}</td>
+                              <td className="num">{wmaQ == null ? "—" : fmt(wmaQ)}</td>
+                              <td className="num">{trendQ == null ? "—" : fmt(trendQ)}</td>
+                              <td className="num">{seasonalQ == null ? "—" : fmt(seasonalQ)}</td>
+                              <td className="num" style={{ fontWeight: "bold", background: "rgba(16, 185, 129, 0.05)", color: "var(--green)" }}>
+                                {fmt(r.q)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {detail.fc.length === 0 && <tr><td colSpan={5} style={{ color: "var(--muted)" }}>No forecast available.</td></tr>}
                       </tbody>
                     </table>
                   </div>
                 </div>
               </section>
+
+              <ProductionScheduleSimulator detail={detail} />
 
               <div className="card">
                 <h2 className="card-title">Bill of Materials</h2>

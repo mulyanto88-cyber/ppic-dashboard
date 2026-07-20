@@ -1108,41 +1108,7 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
         </div>
       )}
 
-      {mode === "daily" && daily.list.some((r) => r.matShort > 0) && (
-        <div className="card" style={{ borderColor: "var(--red)" }}>
-          <h2 className="card-title">Material Shortages — RMPM blocking production</h2>
-          <div className="card-note">
-            SKUs whose 2-week plan is cut because a material is short · scarce materials go to the most critical SKUs first ·
-            follow up in the MRP tab / with purchasing
-          </div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Priority #</th><th>SKU</th><th className="num">Needed 2-wk</th><th className="num">Schedulable</th>
-                  <th className="num">Short (FG)</th><th>Limiting Material</th><th className="num">Mat SOH</th><th className="num">PO Incoming</th>
-                </tr>
-              </thead>
-              <tbody>
-                {daily.list.map((r, i) => r.matShort > 0 ? (
-                  <tr key={r.sku_name}>
-                    <td className="num" style={{ color: "var(--muted)" }}>{i + 1}</td>
-                    <td className="name">{r.sku_name}</td>
-                    <td className="num">{fmt(r.need2)}</td>
-                    <td className="num">{fmt(r.need2 - r.matShort)}</td>
-                    <td className="num" style={{ color: "var(--red)", fontWeight: 700 }}>{fmt(r.matShort)}</td>
-                    <td className="name">{r.limComp || "—"}</td>
-                    <td className="num">{r.limSoh == null ? "—" : fmt(r.limSoh)}</td>
-                    <td className="num" style={{ color: r.limInc > 0 ? "var(--green)" : "var(--muted)" }}>
-                      {r.limInc > 0 ? fmt(r.limInc) : "—"}
-                    </td>
-                  </tr>
-                ) : null)}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+
 
       {mode === "daily" && (
         <div className="card">
@@ -1324,6 +1290,42 @@ export default function ScheduleClient({ plan, pattern, capacity, meta, bomMatri
           <Pager page={cur} pages={pages} total={tableRows.length} perPage={PER} onPage={setPage} />
         )}
       </div>
+
+      {mode === "daily" && daily.list.some((r) => r.matShort > 0) && (
+        <div className="card" style={{ borderColor: "var(--red)", marginTop: "1rem" }}>
+          <h2 className="card-title">Material Shortages — RMPM blocking production</h2>
+          <div className="card-note">
+            SKUs whose 2-week plan is cut because a material is short · scarce materials go to the most critical SKUs first ·
+            follow up in the MRP tab / with purchasing
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Priority #</th><th>SKU</th><th className="num">Needed 2-wk</th><th className="num">Schedulable</th>
+                  <th className="num">Short (FG)</th><th>Limiting Material</th><th className="num">Mat SOH</th><th className="num">PO Incoming</th>
+                </tr>
+              </thead>
+              <tbody>
+                {daily.list.map((r, i) => r.matShort > 0 ? (
+                  <tr key={r.sku_name}>
+                    <td className="num" style={{ color: "var(--muted)" }}>{i + 1}</td>
+                    <td className="name">{r.sku_name}</td>
+                    <td className="num">{fmt(r.need2)}</td>
+                    <td className="num">{fmt(r.need2 - r.matShort)}</td>
+                    <td className="num" style={{ color: "var(--red)", fontWeight: 700 }}>{fmt(r.matShort)}</td>
+                    <td className="name">{r.limComp || "—"}</td>
+                    <td className="num">{r.limSoh == null ? "—" : fmt(r.limSoh)}</td>
+                    <td className="num" style={{ color: r.limInc > 0 ? "var(--green)" : "var(--muted)" }}>
+                      {r.limInc > 0 ? fmt(r.limInc) : "—"}
+                    </td>
+                  </tr>
+                ) : null)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </>
   );
 }
