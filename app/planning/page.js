@@ -65,7 +65,7 @@ export default async function Planning() {
         <div>
           <h1 className="page-title">Planning — MPS</h1>
           <div className="page-sub">
-            Weekly production plan · demand vs line capacity · min stock 30 days · 3 shifts × 16.5 shift-weeks
+            Weekly production plan · demand vs line capacity · min stock 30 days · 3 shifts × 15.5 shift-weeks
           </div>
         </div>
         <a className="btn-export" href="/api/export?view=v_mps_plan">↓ Export CSV</a>

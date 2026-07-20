@@ -14,6 +14,7 @@ export default async function Schedule() {
     sb("v_forecast_baseline_meta?select=*"),
     sb("v_bom_matrix?select=product,comps"),
     sb("soh?select=snapshot_date&order=snapshot_date.desc&limit=1"),
+    sb("config?select=key,value&key=in.(batch_rounding,fg_target_days)"),
   ]);
 
   const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
@@ -26,6 +27,9 @@ export default async function Schedule() {
   if (latestSohRes && latestSohRes[0] && latestSohRes[0].snapshot_date) {
     latestSohDate = latestSohRes[0].snapshot_date;
   }
+  const configRows = getVal(results[6]);
+  const config = {};
+  for (const r of configRows) config[r.key] = Number(r.value);
 
   const hasData = results.some(r => r.status === "fulfilled");
   if (!hasData) {
@@ -52,6 +56,7 @@ export default async function Schedule() {
       meta={meta}
       bomMatrix={bomMatrix}
       latestSohDate={latestSohDate}
+      config={config}
     />
   );
 }

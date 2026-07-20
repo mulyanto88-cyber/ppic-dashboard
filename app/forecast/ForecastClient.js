@@ -19,20 +19,27 @@ const IconLayers = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="n
 const IconTrophy = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"></path></svg>;
 
 // ---- compute every SKU's models once (memoized in parent) --------------------
-function computeModel(matrixRows) {
+function computeModel(matrixRows, beMap) {
   const map = seriesFromMatrix(matrixRows);
   const skus = {};
   let months = [];
+  const hasBE = beMap && Object.keys(beMap).length > 0;
+
   for (const sku in map) {
     const s = map[sku];
+    // Append BE current month to series (improves MA/WMA/trend recency)
+    if (hasBE && beMap[sku] && beMap[sku].be_qty > 0) {
+      const beMonth = beMap[sku].month || new Date().toISOString().slice(0, 7) + '-01';
+      s.push({ ym: beMonth, q: Number(beMap[sku].be_qty) || 0 });
+    }
     if (s.length < 4) continue;
     const total12 = s.slice(-12).reduce((a, b) => a + b.q, 0);
-    if (total12 <= 0) continue;                    // lewati SKU tanpa penjualan
+    if (total12 <= 0) continue;
     const methods = {};
     for (const m of METHOD_KEYS) methods[m] = backtest(s, m);
-    const champ = champion(s);
+    const champ = champion(s, ["wma", "trend", "seasonal"]);
     const fwd = {};
-    for (const m of METHOD_KEYS) fwd[m] = forecastForward(s, m, { h: 3, skipCurrent: true });
+    for (const m of METHOD_KEYS) fwd[m] = forecastForward(s, m, { h: 3, skipCurrent: hasBE ? false : true });
     if (!months.length && fwd.wma.length) months = fwd.wma.map((x) => x.ym);
     skus[sku] = { name: sku, series: s, total12, methods, champ, fwd };
   }
@@ -49,7 +56,8 @@ function csvCell(v) {
 }
 function exportCSV(list, months, segMap, valMap, beInfo) {
   const sorted = [...list].sort((a, b) => b.total12 - a.total12);
-  const histMonths = sorted.length ? sorted[0].series.slice(-4).map((p) => p.ym) : [];
+  const beExtra = sorted.length && sorted[0].series.length > 24 ? 1 : 0;
+  const histMonths = sorted.length ? sorted[0].series.slice(-4 - beExtra, beExtra ? -1 : undefined).map((p) => p.ym) : [];
   const hasBE = !!(beInfo && beInfo.month);
   const head = ["No", "SKU", "Type", "ABC (value)", "XYZ", "Trend", "Champion Model", "Accuracy_%",
     ...histMonths.map((m) => "Actual " + ym(m)),
@@ -63,7 +71,7 @@ function exportCSV(list, months, segMap, valMap, beInfo) {
     const beRow = hasBE ? beInfo.map[x.name] : null;
     return [idx + 1, x.name, sg.type || "", valMap[x.name] || "", sg.xyz_class || "", sg.trend || "",
       METHODS[x.champ.method].label, acc,
-      ...x.series.slice(-4).map((p) => p.q),
+      ...x.series.slice(-4 - (x.series.length > 24 ? 1 : 0), x.series.length > 24 ? -1 : undefined).map((p) => p.q),
       ...(hasBE ? [
         beRow && beRow.qty_to_date != null ? beRow.qty_to_date : "",
         beRow && beRow.month_progress_pct != null ? beRow.month_progress_pct : "",
@@ -82,7 +90,12 @@ function exportCSV(list, months, segMap, valMap, beInfo) {
 
 export default function ForecastClient({ matrix, seg, val, meta, live = [], liveDetail = [], liveErr = null, be = [], scope = null }) {
   const [tab, setTab] = useState("Overview");
-  const { skus, months } = useMemo(() => computeModel(matrix), [matrix]);
+  const beMap = useMemo(() => {
+    const m = {}; for (const r of be) m[r.sku_name] = r; return m;
+  }, [be]);
+
+  const { skus, months } = useMemo(() => computeModel(matrix, beMap), [matrix, beMap]);
+
   const segMap = useMemo(() => {
     const m = {}; for (const r of seg) m[r.sku_name] = r; return m;
   }, [seg]);
@@ -90,19 +103,15 @@ export default function ForecastClient({ matrix, seg, val, meta, live = [], live
   const valMap = useMemo(() => {
     const m = {}; for (const v of val) m[v.sku_name] = v.abc_tier_value; return m;
   }, [val]);
-  // Best Estimate bulan berjalan (proyeksi kurva mingguan bln lalu, per SKU)
+  // Best Estimate bulan berjalan (proyeksi kurva weekly pattern, payday-aware)
   const beInfo = useMemo(() => {
-    const map = {};
-    for (const r of be) map[r.sku_name] = r;
     const month = be.length ? be[0].month : null;
-    // headline = kurva global (per-SKU pct beda-beda; global utk konteks)
     const progress = be.length
       ? Number(be[0].global_progress_pct != null ? be[0].global_progress_pct : be[0].month_progress_pct)
       : null;
     const total = be.reduce((s, r) => (skus[r.sku_name] ? s + Number(r.be_qty || 0) : s), 0);
-    return { map, month, progress, total };
-  }, [be, skus]);
-
+    return { map: beMap, month, progress, total };
+  }, [be, beMap, skus]);
   return (
     <>
       <div className="page-head">
@@ -214,7 +223,8 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
   }));
 
   // 4 bulan aktual LENGKAP terakhir (bulan berjalan parsial dikecualikan)
-  const histMonths = list.length ? list[0].series.slice(-4).map((p) => p.ym) : [];
+  const beExtra = list.length && list[0].series.length > 24 ? 1 : 0;
+  const histMonths = list.length ? list[0].series.slice(-4 - beExtra, beExtra ? -1 : undefined).map((p) => p.ym) : [];
   const histTotals = histMonths.map((mo, i) => ({
     _lbl: ym(mo),
     total: list.reduce((s, x) => s + (x.series[x.series.length - 4 + i]?.q || 0), 0),
@@ -250,9 +260,9 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
         <div className="card kpi-card">
           <div className="kpi-icon accent"><IconTarget /></div>
           <div>
-            <div className="kpi-label">Portfolio Accuracy</div>
+            <div className="kpi-label">Backtest Accuracy</div>
             <div className="kpi-value" style={accColor(portAcc)}>{portAcc === null ? "—" : pct(portAcc)}</div>
-            <div className="kpi-sub">volume-weighted · target ≥ 80%</div>
+            <div className="kpi-sub">volume-weighted · rolling 1-step holdout · target ≥ 80%</div>
           </div>
         </div>
         <div className="card kpi-card">
@@ -285,7 +295,7 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
         <h2 className="card-title">Total Actual vs Forecast by Month</h2>
         <div className="card-note">
           total units · all SKUs · last {histMonths.length} complete actual months
-          {hasBE ? ` · ${ym(beInfo.month)}* = Best Estimate: MTD ÷ progress % from each SKU's own weekly curve last month (global ${pct(beInfo.progress)} as fallback) — payday-aware` : ""}
+          {hasBE ? ` · ${ym(beInfo.month)}* = Best Estimate (weekly-pattern payday-aware) — feeds the forecast engine as the most recent data point` : ""}
           {" "}· next {months.length} forecast months (champion each)
         </div>
         <div className="barchart">
@@ -326,17 +336,17 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
                   </th>
                 )}
                 {hasBE && (
-                  <th rowSpan={2} className="num" style={{ color: "var(--amber)" }}>
-                    {ym(beInfo.month)} BE*
+                  <th colSpan={2} style={{ textAlign: "center", color: "var(--amber)" }}>
+                    {ym(beInfo.month)}
                   </th>
                 )}
                 <th colSpan={months.length} style={{ textAlign: "center", color: "var(--accent)" }}>
                   Forecast
                 </th>
-                <th rowSpan={2} className="num">Accuracy</th>
               </tr>
               <tr>
                 {histMonths.map((m) => <th className="num" key={"h" + m}>{ym(m)}</th>)}
+                {hasBE && <><th className="num" style={{ color: "var(--muted)" }}>MTD</th><th className="num" style={{ color: "var(--amber)" }}>BE</th></>}
                 {months.map((m) => <th className="num" key={m}>{ym(m)}</th>)}
               </tr>
             </thead>
@@ -344,9 +354,9 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
               {pageRows.map((v, i) => {
                 const x = skus[v.sku_name];
                 const sg = segMap[v.sku_name] || {};
-                const acc = x.champ.wmape === null ? null : 100 - x.champ.wmape;
                 const f = x.fwd[x.champ.method];
-                const hist4 = x.series.slice(-4);
+                const hasBEData = x.series.length > 24;
+                const hist4 = x.series.slice(hasBEData ? -5 : -4, hasBEData ? -1 : undefined);
                 return (
                   <tr key={v.sku_name}>
                     <td className="num" style={{ color: "var(--muted)" }}>{cur * PER_PAGE + i + 1}</td>
@@ -359,19 +369,17 @@ function Overview({ skus, months, segMap, ranked, meta, beInfo }) {
                     ))}
                     {hasBE && (() => {
                       const b = beInfo.map[v.sku_name];
-                      const tip = b
-                        ? `MTD ${fmt(b.qty_to_date)} ÷ ${b.month_progress_pct}% (${b.progress_basis || "curve"})`
-                        : "";
-                      return (
-                        <td className="num" style={{ color: "var(--amber)" }} title={tip}>
+                      return <>
+                        <td className="num" style={{ color: "var(--muted)" }}>{b && b.qty_to_date != null ? fmt(b.qty_to_date) : "—"}</td>
+                        <td className="num" style={{ color: "var(--amber)", fontWeight: 550 }}
+                          title={`MTD ${b ? fmt(b.qty_to_date) : "—"} ÷ ${b ? b.month_progress_pct : "—"}% (${b ? b.progress_basis : "—"})`}>
                           {b && b.be_qty != null ? fmt(b.be_qty) : "—"}
                         </td>
-                      );
+                      </>;
                     })()}
                     {f.map((p, j) => (
                       <td className="num" key={j} style={{ fontWeight: 650 }}>{fmt(p.q)}</td>
                     ))}
-                    <td className="num" style={accColor(acc)}>{acc === null ? "—" : pct(acc)}</td>
                   </tr>
                 );
               })}

@@ -12,7 +12,7 @@ const NAV = [
   { href: "/schedule", label: "Prod. Schedule" },
   { href: "/mrp", label: "MRP" },
   { href: "/deep-dive", label: "Deep Dive" },
-  { href: "/wip", label: "WIP Monitoring" },
+  { href: "/wip", label: "MO Monitoring" },
   { href: "/glossary", label: "Glossary" },
 ];
 

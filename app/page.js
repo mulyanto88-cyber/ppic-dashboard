@@ -139,8 +139,8 @@ export default async function DemandAnalytics() {
       </div>
 
       <div className="card">
-        <h2 className="card-title">Weekly Pattern</h2>
-        <div className="card-note">last 12 weeks · units delivered (FG) · label = week start · hover for ISO week &amp; date range</div>
+        <h2 className="card-title">Weekly FG Trend</h2>
+        <div className="card-note">last 12 weeks · FG units (matched to product master) · label = week start · hover for ISO week &amp; date range</div>
         <WeeklyBars data={weekly} />
       </div>
 

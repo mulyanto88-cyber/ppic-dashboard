@@ -1,62 +1,61 @@
 import { sb } from "../../lib/supabase";
-import WipClient from "./WipClient";
+import MoMonitoringClient from "./MoMonitoringClient";
 
 export const dynamic = "force-dynamic";
 
-export default async function WipMonitoring() {
-  let wipRows = [], materialMaster = [], mrpData = [];
+export default async function MoMonitoring() {
+  let moHeaders = [], moWip = [], materialMaster = [];
 
-  const maxDateResult = await sb("mo_wip?select=snapshot_date&order=snapshot_date.desc&limit=1");
+  const maxDateResult = await sb("mo_header?select=snapshot_date&order=snapshot_date.desc&limit=1");
   const maxDate = maxDateResult?.[0]?.snapshot_date || "";
 
   const results = await Promise.allSettled([
     maxDate
-      ? sb(`mo_wip?select=*&snapshot_date=eq.${maxDate}&order=wip_qty.desc`)
-      : sb("mo_wip?select=*&order=wip_qty.desc"),
+      ? sb(`mo_header?select=*&snapshot_date=eq.${maxDate}&order=mo_reference`)
+      : sb("mo_header?select=*&order=mo_reference"),
+    sb(`mo_wip?select=*&snapshot_date=eq.${maxDate}`),
     sb("material_master?select=*"),
-    sb("v_mrp?select=component,weeks_cover,status,weekly_consumption,total_position"),
+    sb("product_master?select=sku_name,type,status"),
   ]);
 
   const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
-  wipRows = getVal(results[0]);
-  materialMaster = getVal(results[1]);
-  mrpData = getVal(results[2]);
+  moHeaders = getVal(results[0]);
+  moWip = getVal(results[1]);
+  materialMaster = getVal(results[2]);
+  const productMaster = getVal(results[3]);
+
+  const wipMap = {};
+  for (const w of moWip) {
+    wipMap[w.component.toUpperCase()] = w;
+  }
 
   const vendorMap = {};
   for (const m of materialMaster) {
     vendorMap[m.material_name.toUpperCase()] = m.vendor_name || "";
   }
 
-  const mrpMap = {};
-  for (const r of mrpData) {
-    mrpMap[r.component.toUpperCase()] = r;
+  const fgMap = {};
+  for (const p of productMaster) {
+    fgMap[p.sku_name.toUpperCase()] = p;
   }
 
-  const enriched = wipRows.map((r) => ({
-    component: r.component,
-    wip_qty: Number(r.wip_qty) || 0,
-    snapshot_date: r.snapshot_date,
-    vendor: vendorMap[r.component.toUpperCase()] || "—",
-    mrp_status: mrpMap[r.component.toUpperCase()]?.status || null,
-    weeks_cover: mrpMap[r.component.toUpperCase()]?.weeks_cover || null,
-    weekly_consumption: mrpMap[r.component.toUpperCase()]?.weekly_consumption || null,
-    total_position: mrpMap[r.component.toUpperCase()]?.total_position || null,
-  })).sort((a, b) => b.wip_qty - a.wip_qty);
+  const enriched = moHeaders.map((mo) => ({
+    ...mo,
+    product_type: fgMap[mo.product?.toUpperCase()]?.type || "",
+    product_status: fgMap[mo.product?.toUpperCase()]?.status || "",
+  }));
 
-  const totalWip = enriched.reduce((s, r) => s + r.wip_qty, 0);
-  const criticalCount = enriched.filter((r) => r.mrp_status === "Critical").length;
-  const belowMinCount = enriched.filter((r) => r.mrp_status === "Below Min").length;
+  const activeMos = enriched.filter((m) => m.state?.toLowerCase() !== "done").length;
+  const doneMos = enriched.filter((m) => m.state?.toLowerCase() === "done").length;
+  const totalPlanned = enriched.reduce((s, m) => s + (Number(m.total_planned_qty) || 0), 0);
 
   return (
-    <WipClient
-      rows={enriched}
-      kpi={{
-        totalWip,
-        componentCount: enriched.length,
-        criticalCount,
-        belowMinCount,
-        snapshotDate: maxDate,
-      }}
+    <MoMonitoringClient
+      moHeaders={enriched}
+      moWip={moWip}
+      wipMap={wipMap}
+      vendorMap={vendorMap}
+      kpi={{ activeMos, doneMos, totalMos: enriched.length, totalPlanned, snapshotDate: maxDate }}
     />
   );
 }

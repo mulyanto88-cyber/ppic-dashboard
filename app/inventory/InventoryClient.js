@@ -70,14 +70,12 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
   const atRisk = useMemo(() => {
     return cover
       .filter((r) => r.cover_status === "Critical" || r.cover_status === "Below Min")
-      .sort((x, y) => Number(y.wk_run_rate || 0) - Number(x.wk_run_rate || 0))
-      .slice(0, 15);
+      .sort((x, y) => Number(y.wk_run_rate || 0) - Number(x.wk_run_rate || 0));
   }, [cover]);
 
   const slowDead = useMemo(() => {
     return inv
-      .filter((r) => (r.movement_class === "Slow" || r.movement_class === "Dead") && Number(r.soh_qty) > 0)
-      .slice(0, 15);
+      .filter((r) => (r.movement_class === "Slow" || r.movement_class === "Dead") && Number(r.soh_qty) > 0);
   }, [inv]);
 
   const slowDeadValue = useMemo(() => {
@@ -160,8 +158,13 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
     setFgPage(0);
   };
 
+  // At-risk + slow/dead pagination
+  const [atRiskPage, setAtRiskPage] = useState(0);
+  const [slowDeadPage, setSlowDeadPage] = useState(0);
+
   // RMPM states
   const [rmpmSearch, setRmpmSearch] = useState("");
+  const [rmpmSortKey, setRmpmSortKey] = useState("total_position");
   const [showNegativeOnly, setShowNegativeOnly] = useState(false);
   const [rmpmPage, setRmpmPage] = useState(0);
 
@@ -327,7 +330,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
 
           <div className="card">
             <h2 className="card-title">At-Risk — Low Cover, High Demand</h2>
-            <div className="card-note">Critical / Below Min, ranked by weekly demand (biggest exposure first)</div>
+            <div className="card-note">Critical / Below Min, ranked by weekly demand · BUNDLING items with SOH=0 are assembled, not stocked</div>
             <div className="table-wrap">
               <table className="table">
                 <thead>
@@ -337,7 +340,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                   </tr>
                 </thead>
                 <tbody>
-                  {atRisk.map((r, i) => (
+                  {atRisk.slice(atRiskPage * PER_PAGE, atRiskPage * PER_PAGE + PER_PAGE).map((r, i) => (
                     <tr key={i}>
                       <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                       <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier}</span></td>
@@ -350,6 +353,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 </tbody>
               </table>
             </div>
+            <Pager page={atRiskPage} pages={Math.max(1, Math.ceil(atRisk.length / PER_PAGE))} total={atRisk.length} perPage={PER_PAGE} onPage={setAtRiskPage} />
           </div>
 
           <div className="card">
@@ -361,7 +365,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                   <tr><th>SKU</th><th>Type</th><th className="num">SOH</th><th className="num">Est. Value</th><th>Velocity</th><th>Trend</th></tr>
                 </thead>
                 <tbody>
-                  {slowDead.map((r, i) => (
+                  {slowDead.slice(slowDeadPage * PER_PAGE, slowDeadPage * PER_PAGE + PER_PAGE).map((r, i) => (
                     <tr key={i}>
                       <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
                       <td>{r.type}</td>
@@ -374,6 +378,7 @@ export default function InventoryClient({ kpi, byMove, cover, inv, stockPosition
                 </tbody>
               </table>
             </div>
+            <Pager page={slowDeadPage} pages={Math.max(1, Math.ceil(slowDead.length / PER_PAGE))} total={slowDead.length} perPage={PER_PAGE} onPage={setSlowDeadPage} />
           </div>
 
           <div className="card" style={{ marginBottom: "1rem" }}>
