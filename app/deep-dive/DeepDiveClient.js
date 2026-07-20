@@ -9,6 +9,7 @@ const IconDollarSign = () => <svg width="22" height="22" viewBox="0 0 24 24" fil
 const IconPackage = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>;
 const IconTag = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>;
 const IconTrendingUp = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>;
+const IconShieldAlert = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>;
 
 const MAT_BADGE = { Critical: "declining", "Below Min": "stable", OK: "growing" };
 
@@ -702,40 +703,79 @@ export default function DeepDiveClient({
                 </div>
               </div>
 
-              <section className="kpi-grid">
-                <div className="card kpi-card">
-                  <div className="kpi-icon accent"><IconDollarSign /></div>
-                  <div>
-                    <div className="kpi-label">Revenue (12 mo)</div>
-                    <div className="kpi-value">{rp(detail.val.value_12m)}</div>
-                    <div className="kpi-sub">{fmt(detail.seg.qty_12m)} units</div>
-                  </div>
-                </div>
-                <div className="card kpi-card">
-                  <div className="kpi-icon green"><IconPackage /></div>
-                  <div>
-                    <div className="kpi-label">Stock on Hand</div>
-                    <div className="kpi-value">{fmt(detail.inv.soh_qty)}</div>
-                    <div className="kpi-sub">DOI {detail.inv.doi_days == null ? "—" : detail.inv.doi_days + " d"}</div>
-                  </div>
-                </div>
-                <div className="card kpi-card">
-                  <div className="kpi-icon amber"><IconTag /></div>
-                  <div>
-                    <div className="kpi-label">Avg Price</div>
-                    <div className="kpi-value">{rp(detail.val.avg_price_idr)}</div>
-                    <div className="kpi-sub">per unit</div>
-                  </div>
-                </div>
-                <div className="card kpi-card">
-                  <div className="kpi-icon muted"><IconTrendingUp /></div>
-                  <div>
-                    <div className="kpi-label">Forecast (next mo)</div>
-                    <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].q) : "—"}</div>
-                    <div className="kpi-sub">{METHODS[detail.champMethod]?.label || "Forecast Engine"}</div>
-                  </div>
-                </div>
-              </section>
+              {(() => {
+                const mps = detail.mpsPlan || {};
+                const soh = Number(detail.inv?.soh_qty || mps.soh || 0);
+                const weeklyDemand = Number(mps.weekly_demand || (detail.seg?.avg_monthly ? detail.seg.avg_monthly / 4.345 : 0));
+                const dailyDemand = weeklyDemand / 7;
+                const minStockTarget = Math.round(dailyDemand * 30);
+                
+                const weeksCoverVal = weeklyDemand > 0 
+                  ? (soh / weeklyDemand).toFixed(1) 
+                  : (detail.inv?.doi_days ? (detail.inv.doi_days / 7).toFixed(1) : null);
+                const weeksCoverStr = weeksCoverVal != null ? `${weeksCoverVal} wks` : "—";
+
+                const isBelowMin = soh < minStockTarget;
+                const isCritical = soh < minStockTarget * 0.5;
+
+                let bufferIconColor = "green";
+                let coverStatusText = "✅ Stock Healthy";
+                if (soh <= 0) {
+                  bufferIconColor = "red";
+                  coverStatusText = "🚨 Stockout";
+                } else if (isCritical) {
+                  bufferIconColor = "red";
+                  coverStatusText = "🔴 Critical Stock";
+                } else if (isBelowMin) {
+                  bufferIconColor = "amber";
+                  coverStatusText = "⚠️ Below Stock Minimum";
+                }
+
+                return (
+                  <section className="kpi-grid">
+                    <div className="card kpi-card">
+                      <div className="kpi-icon accent"><IconDollarSign /></div>
+                      <div>
+                        <div className="kpi-label">Revenue (12 mo)</div>
+                        <div className="kpi-value">{rp(detail.val.value_12m)}</div>
+                        <div className="kpi-sub">{fmt(detail.seg.qty_12m)} units</div>
+                      </div>
+                    </div>
+                    <div className="card kpi-card">
+                      <div className="kpi-icon green"><IconPackage /></div>
+                      <div>
+                        <div className="kpi-label">Stock on Hand</div>
+                        <div className="kpi-value">{fmt(detail.inv.soh_qty)}</div>
+                        <div className="kpi-sub">DOI {detail.inv.doi_days == null ? "—" : detail.inv.doi_days + " d"}</div>
+                      </div>
+                    </div>
+                    <div className="card kpi-card">
+                      <div className={"kpi-icon " + bufferIconColor}><IconShieldAlert /></div>
+                      <div>
+                        <div className="kpi-label">Stock Buffer Status</div>
+                        <div className="kpi-value" style={{ fontSize: "22px" }}>{weeksCoverStr} <span style={{ fontSize: "12px", fontWeight: "normal", color: "var(--muted)" }}>cover</span></div>
+                        <div className="kpi-sub" style={{ fontWeight: 600 }}>{coverStatusText}</div>
+                      </div>
+                    </div>
+                    <div className="card kpi-card">
+                      <div className="kpi-icon muted"><IconTrendingUp /></div>
+                      <div>
+                        <div className="kpi-label">Forecast (next mo)</div>
+                        <div className="kpi-value">{detail.fc[0] ? fmt(detail.fc[0].q) : "—"}</div>
+                        <div className="kpi-sub">{METHODS[detail.champMethod]?.label || "Forecast Engine"}</div>
+                      </div>
+                    </div>
+                    <div className="card kpi-card">
+                      <div className="kpi-icon amber"><IconTag /></div>
+                      <div>
+                        <div className="kpi-label">Avg Price</div>
+                        <div className="kpi-value">{rp(detail.val.avg_price_idr)}</div>
+                        <div className="kpi-sub">per unit</div>
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
 
               <section className="grid-2">
                 <div className="card">
