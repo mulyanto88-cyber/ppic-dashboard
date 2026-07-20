@@ -1,280 +1,80 @@
-import { sb } from "../lib/supabase";
-import Link from "next/link";
-import { fmt, rp, ym, dmon, pct } from "../lib/format";
-import ChartCombo from "./ChartCombo";
-import WeeklyBars from "./WeeklyBars";
+import { sb, sbAll } from "../lib/supabase";
+import DemandAnalyticsClient from "./DemandAnalyticsClient";
 
 export const dynamic = "force-dynamic";
 
-function BarChart({ data, valueKey, labelKey, showVal }) {
-  const max = Math.max(1, ...data.map((d) => Number(d[valueKey]) || 0));
-  return (
-    <div className="barchart">
-      {data.map((d, i) => {
-        const v = Number(d[valueKey]) || 0;
-        return (
-          <div className="bar-col" key={i}>
-            {showVal && <div className="bar-val">{fmt(v)}</div>}
-            <div className="bar hl" style={{ height: (v / max) * 100 + "%" }} />
-            <div className="bar-label">{d[labelKey]}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function pctOf(part, total) {
-  return total > 0 ? pct((Number(part) || 0) / total * 100) : "—";
-}
-
-const IconTrendingUp = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline><polyline points="16 7 22 7 22 13"></polyline></svg>;
-const IconPackage = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>;
-const IconTag = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>;
-const IconLayers = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 12 12 17 22 12"></polyline><polyline points="2 17 12 22 22 17"></polyline></svg>;
-
 export default async function DemandAnalytics() {
-  let revenue = [], weekly = [], skuValue = [], seg = [], matrix = [],
-    movement = [], abc = [], recent = [], watch = [];
-  
+  let revenue = [], weekly = [], skuValue = [], seg = [],
+    recent = [], watch = [], productMaster = [],
+    salesMonthly18 = [], salesWeekly12 = [];
+
   const results = await Promise.allSettled([
     sb("v_revenue_monthly?select=*&order=month.asc"),
     sb("v_weekly_trend?select=*&order=week_start.asc"),
     sb("v_sku_value?select=*&order=value_12m.desc"),
-    sb("v_sku_segmentation?select=sku_name,abc_tier,movement_class,xyz_class,trend"),
-    sb("v_sku_segmentation_summary?select=*"),
-    sb("v_sku_movement_summary?select=*"),
-    sb("v_sku_abc_summary?select=*"),
+    sb("v_sku_segmentation?select=sku_name,abc_tier,movement_class,xyz_class,trend,type"),
     sb("v_sku_recent_sales?select=*"),
-    sb("v_sku_trend_watch?select=*&limit=12"),
+    sb("v_sku_trend_watch?select=*&limit=24"),
+    sbAll("product_master?select=sku_name,brand,type,sub_category,series,status"),
   ]);
 
-  const getVal = (res) => res.status === "fulfilled" ? res.value || [] : [];
-  
+  const getVal = (res) => (res.status === "fulfilled" ? res.value || [] : []);
+
   revenue = getVal(results[0]);
   weekly = getVal(results[1]);
   skuValue = getVal(results[2]);
   seg = getVal(results[3]);
-  matrix = getVal(results[4]);
-  movement = getVal(results[5]);
-  abc = getVal(results[6]);
-  recent = getVal(results[7]);
-  watch = getVal(results[8]);
+  recent = getVal(results[4]);
+  watch = getVal(results[5]);
+  productMaster = getVal(results[6]);
 
-  const hasData = results.some(r => r.status === "fulfilled");
+  const hasData = results.some((r) => r.status === "fulfilled");
   if (!hasData) {
-    return <div className="card error"><h2>Failed to load data</h2><pre>Database connection failed or returned no data.</pre></div>;
+    return (
+      <div className="card error">
+        <h2>Failed to load data</h2>
+        <pre>Database connection failed or returned no data.</pre>
+      </div>
+    );
   }
 
-  const totalValue = skuValue.reduce((s, r) => s + Number(r.value_12m || 0), 0);
-  const totalQty = skuValue.reduce((s, r) => s + Number(r.qty_12m || 0), 0);
-  const avgPrice = totalQty > 0 ? totalValue / totalQty : 0;
-  const nA = skuValue.filter((r) => r.abc_tier_value === "A").length;
   const lastMonth = revenue.length ? revenue[revenue.length - 1].month : null;
 
-  const segMap = {}; for (const s of seg) segMap[s.sku_name] = s;
-  const recentMap = {}; for (const r of recent) recentMap[r.sku_name] = r;
+  // Calculate min month for 18-month range
+  let minMonthStr = "2025-01-01";
+  if (lastMonth) {
+    const d18 = new Date(lastMonth);
+    d18.setMonth(d18.getMonth() - 17);
+    minMonthStr = d18.toISOString().slice(0, 7) + "-01";
+  }
 
-  const topValue = skuValue.slice(0, 12);
-  const rev18 = revenue.slice(-18).map((r) => ({ ...r, _lbl: ym(r.month) }));
+  // Calculate min week_start for 12-week range
+  const minWeekStr = weekly.length ? weekly[0].week_start : "2026-04-01";
 
-  // 4 recent month labels (untuk header kolom Top 12): [m3, m2, m1, m0]
-  const last4 = revenue.slice(-4).map((r) => ym(r.month));
-
-  // totals untuk %
-  const movSku = movement.reduce((s, m) => s + Number(m.sku_count || 0), 0);
-  const movVol = movement.reduce((s, m) => s + Number(m.qty_12m || 0), 0);
-  const abcSku = abc.reduce((s, m) => s + Number(m.sku_count || 0), 0);
-  const abcVol = abc.reduce((s, m) => s + Number(m.qty_12m || 0), 0);
+  // Fetch detailed monthly and weekly sales for dynamic filtering
+  try {
+    const [smRes, swRes] = await Promise.allSettled([
+      sbAll(`sales_monthly?select=sku_name,month,qty_delivered&month=gte.${minMonthStr}`),
+      sbAll(`sales_weekly?select=sku_name,week_start,qty,iso_week&week_start=gte.${minWeekStr}`),
+    ]);
+    salesMonthly18 = getVal(smRes);
+    salesWeekly12 = getVal(swRes);
+  } catch (e) {
+    console.error("Failed to load filtered sales details:", e);
+  }
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1 className="page-title">Demand Analytics</h1>
-          <div className="page-sub">Active FG (Continue) · data through {lastMonth ? ym(lastMonth) : "—"} · 12-month basis</div>
-        </div>
-        <a className="btn-export" href="/api/export?view=v_sku_segmentation">↓ Export CSV</a>
-      </div>
-
-      <section className="kpi-grid">
-        <div className="card kpi-card">
-          <div className="kpi-icon accent"><IconTrendingUp /></div>
-          <div>
-            <div className="kpi-label">Revenue (12 mo)</div>
-            <div className="kpi-value">{rp(totalValue)}</div>
-            <div className="kpi-sub">sales value (IDR)</div>
-          </div>
-        </div>
-        <div className="card kpi-card">
-          <div className="kpi-icon green"><IconPackage /></div>
-          <div>
-            <div className="kpi-label">Units Sold (12 mo)</div>
-            <div className="kpi-value">{fmt(totalQty)}</div>
-            <div className="kpi-sub">units delivered</div>
-          </div>
-        </div>
-        <div className="card kpi-card">
-          <div className="kpi-icon amber"><IconTag /></div>
-          <div>
-            <div className="kpi-label">Avg. Price / Unit</div>
-            <div className="kpi-value">{rp(avgPrice)}</div>
-            <div className="kpi-sub">blended</div>
-          </div>
-        </div>
-        <div className="card kpi-card">
-          <div className="kpi-icon muted"><IconLayers /></div>
-          <div>
-            <div className="kpi-label">Active SKUs</div>
-            <div className="kpi-value">{fmt(skuValue.length)}</div>
-            <div className="kpi-sub">{fmt(nA)} Tier A (by value)</div>
-          </div>
-        </div>
-      </section>
-
-      <div className="card">
-        <h2 className="card-title">Monthly Revenue &amp; Units</h2>
-        <div className="card-note">last 18 months · bars = revenue · line = units · hover for exact figures</div>
-        <ChartCombo data={rev18} />
-      </div>
-
-      <div className="card">
-        <h2 className="card-title">Weekly FG Trend</h2>
-        <div className="card-note">last 12 weeks · FG units (matched to product master) · label = week start · hover for ISO week &amp; date range</div>
-        <WeeklyBars data={weekly} />
-      </div>
-
-      <section className="grid-2">
-        <div className="card">
-          <h2 className="card-title">Velocity Distribution</h2>
-          <div className="card-note">SKU count by movement class</div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead><tr><th>Class</th><th className="num">SKUs</th><th className="num">% SKU</th><th className="num">Units (12mo)</th><th className="num">% Vol</th></tr></thead>
-              <tbody>
-                {movement.map((m, k) => (
-                  <tr key={k}>
-                    <td><span className={"badge " + String(m.movement_class || "").toLowerCase()}>{m.movement_class}</span></td>
-                    <td className="num">{fmt(m.sku_count)}</td>
-                    <td className="num">{pctOf(m.sku_count, movSku)}</td>
-                    <td className="num">{fmt(m.qty_12m)}</td>
-                    <td className="num">{pctOf(m.qty_12m, movVol)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card">
-          <h2 className="card-title">Pareto ABC Distribution</h2>
-          <div className="card-note">tier A should be few SKUs but most volume</div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead><tr><th>Tier</th><th className="num">SKUs</th><th className="num">% SKU</th><th className="num">Units (12mo)</th><th className="num">% Vol</th></tr></thead>
-              <tbody>
-                {abc.map((m, k) => (
-                  <tr key={k}>
-                    <td><span className={"badge abc-" + String(m.abc_tier || "").toLowerCase()}>{m.abc_tier}</span></td>
-                    <td className="num">{fmt(m.sku_count)}</td>
-                    <td className="num">{pctOf(m.sku_count, abcSku)}</td>
-                    <td className="num">{fmt(m.qty_12m)}</td>
-                    <td className="num">{pctOf(m.qty_12m, abcVol)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <div className="card">
-        <h2 className="card-title">Top 12 SKUs — Revenue Contribution</h2>
-        <div className="card-note">
-          ranked by 12-month value · monthly sales (last 4 months) · <b>{last4[3] || "current"}* = partial month</b> · Avg/mo = 12-week run-rate → monthly
-        </div>
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>SKU</th>
-                <th className="num">Revenue</th>
-                <th className="num">{last4[0] || "M-3"}</th>
-                <th className="num">{last4[1] || "M-2"}</th>
-                <th className="num">{last4[2] || "M-1"}</th>
-                <th className="num">{last4[3] ? last4[3] + "*" : "M-0"}</th>
-                <th className="num">Avg/mo</th>
-                <th>ABC-val</th>
-                <th>XYZ</th>
-                <th>Trend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topValue.map((r, k) => {
-                const s = segMap[r.sku_name] || {};
-                const rc = recentMap[r.sku_name] || {};
-                return (
-                  <tr key={k}>
-                    <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
-                    <td className="num">{rp(r.value_12m)}</td>
-                    <td className="num">{fmt(rc.m3_qty)}</td>
-                    <td className="num">{fmt(rc.m2_qty)}</td>
-                    <td className="num">{fmt(rc.m1_qty)}</td>
-                    <td className="num">{fmt(rc.m0_qty)}</td>
-                    <td className="num">{fmt(rc.avg_monthly_l3m)}</td>
-                    <td><span className={"badge abc-" + String(r.abc_tier_value || "").toLowerCase()}>{r.abc_tier_value}</span></td>
-                    <td>{s.xyz_class ? <span className={"badge xyz-" + String(s.xyz_class).toLowerCase()}>{s.xyz_class}</span> : "—"}</td>
-                    <td>{s.trend ? <span className={"badge " + String(s.trend).toLowerCase()}>{s.trend}</span> : "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <section className="grid-2">
-        <div className="card">
-          <h2 className="card-title">ABC × XYZ Matrix</h2>
-          <div className="card-note">SKU count per combination (qty basis)</div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead><tr><th>ABC</th><th>XYZ</th><th className="num">SKUs</th><th className="num">Units (12mo)</th></tr></thead>
-              <tbody>
-                {matrix.map((m, k) => (
-                  <tr key={k}>
-                    <td><span className={"badge abc-" + String(m.abc_tier || "").toLowerCase()}>{m.abc_tier}</span></td>
-                    <td>{m.xyz_class === "N/A" ? <span className="badge na">N/A</span> : <span className={"badge xyz-" + String(m.xyz_class || "").toLowerCase()}>{m.xyz_class}</span>}</td>
-                    <td className="num">{fmt(m.sku_count)}</td>
-                    <td className="num">{fmt(m.qty_12m)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card">
-          <h2 className="card-title">Momentum Watchlist</h2>
-          <div className="card-note">A/B SKUs declining or C SKUs rising</div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead><tr><th>SKU</th><th>ABC</th><th className="num">Units (12mo)</th><th>Trend</th></tr></thead>
-              <tbody>
-                {watch.map((r, k) => (
-                  <tr key={k}>
-                    <td className="name"><Link href={`/deep-dive?sku=${encodeURIComponent(r.sku_name)}`} style={{color:"inherit",textDecoration:"none"}}>{r.sku_name}</Link></td>
-                    <td><span className={"badge abc-" + String(r.abc_tier || "").toLowerCase()}>{r.abc_tier}</span></td>
-                    <td className="num">{fmt(r.qty_12m)}</td>
-                    <td><span className={"badge " + String(r.trend || "").toLowerCase()}>{r.trend}</span></td>
-                  </tr>
-                ))}
-                {watch.length === 0 && <tr><td colSpan={4} style={{ color: "var(--muted)" }}>No SKUs on watchlist.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </>
+    <DemandAnalyticsClient
+      productMaster={productMaster}
+      skuValue={skuValue}
+      skuSegmentation={seg}
+      recentSales={recent}
+      trendWatch={watch}
+      revenueMonthly={revenue}
+      weeklyTrend={weekly}
+      salesMonthly18={salesMonthly18}
+      salesWeekly12={salesWeekly12}
+      lastMonth={lastMonth}
+    />
   );
 }
