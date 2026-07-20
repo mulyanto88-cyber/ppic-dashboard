@@ -54,7 +54,7 @@ function ProductionScheduleSimulator({ detail }) {
   const dailyDemand = weeklyDemand / 7;
 
   const [targetDays, setTargetDays] = useState(30);
-  const [batchRounding, setBatchRounding] = useState(5000);
+  const [batchRounding, setBatchRounding] = useState(500);
 
   const minStockTarget = Math.round(dailyDemand * targetDays);
   const isBelowMin = soh < minStockTarget;
