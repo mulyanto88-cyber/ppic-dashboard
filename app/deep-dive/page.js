@@ -87,26 +87,49 @@ export default async function DeepDive({ searchParams }) {
           avg_monthly: 0
         };
 
+        if (segObj && sales && sales.length > 0) {
+          const nonZeroSales = sales.filter((s) => Number(s.qty_delivered) > 0);
+          if (nonZeroSales.length > 0) {
+            const sortedSales = [...nonZeroSales].sort((a, b) => (a.month > b.month ? 1 : -1));
+            const firstMonth = sortedSales[0].month;
+            const maxMonth = sortedSales[sortedSales.length - 1].month;
+            const maxDate = new Date(maxMonth);
+            const cutoff3m = new Date(maxDate.getFullYear(), maxDate.getMonth() - 2, 1).toISOString().slice(0, 10);
+
+            if (firstMonth >= cutoff3m && nonZeroSales.length <= 3) {
+              segObj.movement_class = "New Launch";
+            }
+          }
+        }
+
         const invObj = inv[0] || {
           soh_qty: sohFromTable,
           doi_days: null,
           soh_value_est: 0
         };
 
-        const cleanSeriesMap = seriesFromMatrix(matrix);
-        const cleanSeries = Object.values(cleanSeriesMap)[0] || [];
+        let cleanSeries = [];
+        if (sales && sales.length > 0) {
+          const sortedSales = [...sales].sort((a, b) => (a.month > b.month ? 1 : -1));
+          cleanSeries = sortedSales.map((s) => ({ ym: s.month, q: Number(s.qty_delivered) || 0 }));
+        } else {
+          const cleanSeriesMap = seriesFromMatrix(matrix);
+          cleanSeries = Object.values(cleanSeriesMap)[0] || [];
+        }
 
         let champMethod = "wma";
         let champForecast = [];
-        let modelFc = { wma: [], trend: [], seasonal: [] };
-        if (cleanSeries.length >= 4) {
-          const champ = champion(cleanSeries, ["wma", "trend", "seasonal"]);
+        let modelFc = { wma: [], trend: [], seasonal: [], new_sku_10: [] };
+        if (cleanSeries.length >= 1) {
+          const activeMonths = cleanSeries.filter((p) => Number(p.q) > 0).length;
+          const champ = champion(cleanSeries, activeMonths < 3 ? ["new_sku_10", "wma", "trend"] : ["wma", "trend", "seasonal"]);
           champMethod = champ.method;
-          champForecast = forecastForward(cleanSeries, champMethod, { h: 3, skipCurrent: true });
+          champForecast = forecastForward(cleanSeries, champMethod, { h: 3, skipCurrent: false });
           modelFc = {
-            wma: forecastForward(cleanSeries, "wma", { h: 3, skipCurrent: true }),
-            trend: forecastForward(cleanSeries, "trend", { h: 3, skipCurrent: true }),
-            seasonal: forecastForward(cleanSeries, "seasonal", { h: 3, skipCurrent: true }),
+            wma: forecastForward(cleanSeries, "wma", { h: 3, skipCurrent: false }),
+            trend: forecastForward(cleanSeries, "trend", { h: 3, skipCurrent: false }),
+            seasonal: forecastForward(cleanSeries, "seasonal", { h: 3, skipCurrent: false }),
+            new_sku_10: forecastForward(cleanSeries, "new_sku_10", { h: 3, skipCurrent: false }),
           };
         }
 

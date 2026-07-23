@@ -1,74 +1,274 @@
 "use client";
+
 import { useState } from "react";
 
 // group = dashboard tab tempat istilah dipakai
 const TERMS = [
   // ---------- Demand Analytics ----------
-  { group: "Demand", term: "ABC (by Value)", tag: "Pareto", def: "Classifies SKUs by 12-month sales value. Tier A = top 80% of cumulative value, B = next 15%, C = the tail. Focuses effort where the money is.", formula: "cumulative value %: A ≤ 80% · B ≤ 95% · C = rest" },
-  { group: "Demand", term: "ABC (by Quantity)", tag: "Pareto", def: "Same Pareto logic but based on units delivered instead of value." },
-  { group: "Demand", term: "Category Contribution Tier", tag: "FOOM method", def: "Cumulative contribution ranked within each Product Type. Fast = top SKUs up to 50% of the type's volume, Medium = up to 80%, Slow = the tail.", formula: "cumulative % within Type: Fast ≤ 50% · Medium ≤ 80% · Slow = rest" },
-  { group: "Demand", term: "Movement / Velocity", tag: "FSN", def: "How often a SKU sells over the last 12 months. Fast ≥ 10 active months, Medium 5–9, Slow 1–4, Dead = none. Note: velocity lags a recent decline — pair it with Trend.", formula: "months active out of 12: Fast ≥ 10 · Medium 5–9 · Slow 1–4 · Dead 0" },
-  { group: "Demand", term: "XYZ (Demand Variability)", tag: "forecastability", def: "Coefficient of Variation of monthly demand. X = stable, Y = moderate, Z = erratic / intermittent. Drives which forecast method fits a SKU.", formula: "CoV = std dev ÷ mean · X < 0.5 · Y 0.5–1.0 · Z > 1.0" },
-  { group: "Demand", term: "Trend / Momentum", tag: "6-mo slope", def: "Direction of the last 6 complete months — the slope of a linear trend line fit through them (mimics reading the SKU's line chart). De-seasonalized by using recent months only; not year-over-year, so it isn't inflated by overall business growth.", formula: "slope ÷ avg · Growing ≥ +5%/mo · Stable · Declining ≤ −5%/mo" },
-  { group: "Demand", term: "Sales L3M & Avg/mo", tag: "recent", def: "Sales L3M shows the last calendar months individually (the current month is partial, marked *). Avg/mo is the clean monthly run-rate derived from the last 12 complete weeks — not distorted by the partial month.", formula: "Avg/mo = (last 12 weeks ÷ 12) × 4.345" },
-  { group: "Demand", term: "Weekly Pattern", tag: "seasonality", def: "Units delivered per ISO week over the last 12 weeks. Reveals intra-month rhythm — e.g. payday from the 25th tends to lift end-of-month weeks, informing weekly safety stock." },
+  {
+    group: "Demand",
+    term: "ABC (by Value)",
+    tag: "Pareto",
+    def: "Classifies SKUs by 12-month sales value. Tier A = top 80% of cumulative value, B = next 15%, C = the tail. Focuses effort where the money is.",
+    formula: "cumulative value %: A ≤ 80% · B ≤ 95% · C = rest"
+  },
+  {
+    group: "Demand",
+    term: "ABC (by Quantity)",
+    tag: "Pareto",
+    def: "Same Pareto logic but based on units delivered instead of value."
+  },
+  {
+    group: "Demand",
+    term: "Category Contribution Tier",
+    tag: "FOOM method",
+    def: "Cumulative contribution ranked within each Product Type. Fast = top SKUs up to 80% of the type's volume, Medium = up to 95%, Slow = the tail.",
+    formula: "cumulative % within Type: Fast ≤ 80% · Medium ≤ 95% · Slow = rest"
+  },
+  {
+    group: "Demand",
+    term: "Movement / Velocity (FSN + New Launch)",
+    tag: "Quantile & Age",
+    def: "Evaluates product sales velocity using quantile volume contribution within each Product Type (Liquid, Cartridge, Device) for established products, while isolating newly launched SKUs (< 3 months active) into 'New Launch' to eliminate launch bias.",
+    formula: "🚀 New Launch (age < 3mo) · ⚡ Fast (top 80% volume of Type) · 📦 Medium (80–95% volume) · 🐢 Slow (bottom 5%) · ❄️ Non-Moving (0 sales in L3M)"
+  },
+  {
+    group: "Demand",
+    term: "Demand Analytics Interactive Filters",
+    tag: "Multi-Dimensional",
+    def: "Dynamic dropdown filters for Brand / Group (FOOM, FLOOID, OEM), Sub Category (Liquid, Cartridge, SFG, Merchandise, etc.), and Type (30ML, 15ML, Cartridge, Capsule, etc.). Reactively recalculates all 8 dashboard sections including KPI Cards, 18-Month Combo Chart, 12-Week Bars, Velocity Table, and Pareto ABC.",
+    formula: "Filters: Brand / Group × Sub Category × Type → Real-time Reactive Dashboard recalculation"
+  },
+  {
+    group: "Demand",
+    term: "XYZ (Demand Variability)",
+    tag: "forecastability",
+    def: "Coefficient of Variation of monthly demand. X = stable, Y = moderate, Z = erratic / intermittent. Drives which forecast method fits a SKU.",
+    formula: "CoV = std dev ÷ mean · X < 0.5 · Y 0.5–1.0 · Z > 1.0"
+  },
+  {
+    group: "Demand",
+    term: "Trend / Momentum",
+    tag: "6-mo slope",
+    def: "Direction of the last 6 complete months — the slope of a linear trend line fit through them (mimics reading the SKU's line chart). De-seasonalized by using recent months only; not year-over-year, so it isn't inflated by overall business growth.",
+    formula: "slope ÷ avg · Growing ≥ +5%/mo · Stable · Declining ≤ −5%/mo"
+  },
+  {
+    group: "Demand",
+    term: "Sales L3M & Avg/mo",
+    tag: "recent",
+    def: "Sales L3M shows the last calendar months individually. Avg/mo is the clean monthly run-rate derived from recent live sales history — not distorted by static view caches.",
+    formula: "Avg/mo = recent 3-month sales ÷ 3"
+  },
+  {
+    group: "Demand",
+    term: "Weekly Pattern",
+    tag: "seasonality",
+    def: "Units delivered per ISO week over the last 12 weeks. Reveals intra-month rhythm — e.g. payday from the 25th tends to lift end-of-month weeks, informing weekly safety stock."
+  },
 
   // ---------- Forecast ----------
-  { group: "Forecast", term: "Forecast Methods", tag: "model library", def: "Five methods are computed per SKU and compared: Naive (repeat last month), MA-3 (3-month average), WMA (weighted, recency-biased), Linear Trend (projects the 6-month slope forward — captures growth/decline), and Seasonal (trend × per-month seasonal index). Compare them in the Model Lab sub-tab." },
-  { group: "Forecast", term: "WMA — Weighted Moving Average", tag: "baseline", def: "The validated baseline method. Weights the last three months, emphasizing the most recent to capture momentum. Also the safe fallback when a SKU has too little history to backtest.", formula: "forecast = 0.6·(M-1) + 0.3·(M-2) + 0.1·(M-3)" },
-  { group: "Forecast", term: "Linear Trend", tag: "method", def: "Fits a straight line through the last 6 complete months and projects it forward, so a growing SKU forecasts up and a declining one forecasts down (clamped at 0). Replaces the old flat forecast for trending SKUs.", formula: "forecast(k) = intercept + slope · k" },
-  { group: "Forecast", term: "Seasonal", tag: "method", def: "Multiplies a trend level by a per-calendar-month seasonal index (avg of that month ÷ overall avg). Needs ≥ 12 months of history; falls back to Linear Trend otherwise. Captures repeating patterns like end-of-month payday lift.", formula: "forecast = trend · (month avg ÷ overall avg)" },
-  { group: "Forecast", term: "Champion Model", tag: "auto-select", def: "Per SKU, the method with the lowest backtest wMAPE is chosen automatically as the champion and drives that SKU's forecast — so each SKU gets the model that fits its own behaviour (stable, trending, or erratic).", formula: "champion = argmin(wMAPE) over all methods" },
-  { group: "Forecast", term: "Forecast Horizon", tag: "window", def: "The forecast covers the next 3 complete calendar months. The current in-progress month is partial, so it is skipped — e.g. mid-July forecasts Aug / Sep / Oct, not the half-finished July." },
-  { group: "Forecast", term: "Best Estimate (BE) — current month", tag: "projection", def: "Projection of the in-progress month, shown with a * (e.g. Jul*). Month-to-date sales are grossed up by how far through the month the SKU should be, where the progress % mirrors that SKU's own weekly sales curve last month (day-weighted) — so back-loaded SKUs (payday lift from the 25th, end-of-month distributor orders) are projected on their own rhythm. SKUs with thin history fall back to the global curve. Display context only — it does not feed the forecast engine, the published baseline, or MPS/MRP.", formula: "BE = month-to-date ÷ progress% · progress% = SKU's share of last month's sales through the same day (fallback: global curve)" },
-  { group: "Forecast", term: "MAPE", tag: "error", def: "Mean Absolute Percentage Error — average of |forecast − actual| ÷ actual. Simple MAPE is distorted by tiny SKUs, so we rely on wMAPE." },
-  { group: "Forecast", term: "wMAPE (volume-weighted)", tag: "KPI", def: "Volume-weighted MAPE — the reliable accuracy metric, weighting SKUs by how much they matter. Forecast Accuracy = 100 − wMAPE. Target ≥ 80%.", formula: "Forecast Accuracy = 100 − wMAPE" },
-  { group: "Forecast", term: "Backtest", tag: "validation", def: "Tests a method on past months where the actual is already known — a 1-step-ahead rolling holdout — to judge accuracy objectively rather than by eye. Basis for picking each SKU's champion.", formula: "at each month t: forecast from months 0..t-1, compare to actual t" },
-  { group: "Forecast", term: "Forecast Baseline (published)", tag: "official", def: "A dated snapshot of the champion forecast, locked via the Publish button. It becomes the single official demand figure feeding MPS & MRP, and the reference against which next month's actuals are scored for live accuracy. Re-publishing the same day overwrites that run; a new day is a new run.", formula: "run_date · forecast_month · SKU · qty · method" },
-  { group: "Forecast", term: "Live Performance (published vs actual)", tag: "real accuracy", def: "The true test of the forecast: once a forecast month completes, the locked baseline (the last one published before that month began) is compared against actual sales. Fills in automatically each month — no action needed. Under/Accurate/Over uses a ±10% band per SKU.", formula: "accuracy = 100 − wMAPE of locked baseline vs actual" },
-  { group: "Forecast", term: "Forecast Bias", tag: "direction", def: "Whether the forecast systematically runs high or low. Positive = over-forecasting (excess stock risk), negative = under-forecasting (stock-out risk). Persistent bias in one direction means the model or assumptions need adjusting.", formula: "bias = (Σforecast − Σactual) ÷ Σactual × 100%" },
+  {
+    group: "Forecast",
+    term: "Forecast Methods",
+    tag: "model library",
+    def: "Six methods are computed per SKU and compared: Naive (repeat last month), MA-3 (3-month average), WMA (weighted, recency-biased), Linear Trend (projects 6-month slope), Seasonal (trend × per-month seasonal index), and New SKU (+10% growth for products < 3mo old). Compare them in the Model Lab sub-tab."
+  },
+  {
+    group: "Forecast",
+    term: "New SKU Forecast (+10% Growth)",
+    tag: "short history",
+    def: "For newly launched SKUs with less than 3 months of sales history, WMA or Linear Trend can be diluted by initial launch samples or steep single-month spikes. The forecast engine automatically selects the New SKU (+10%) method, applying a clean 10% monthly growth over the last actual sales volume.",
+    formula: "forecast = Math.round(last_actual_month_sales × 1.10) for short history SKUs (< 3mo)"
+  },
+  {
+    group: "Forecast",
+    term: "WMA — Weighted Moving Average",
+    tag: "baseline",
+    def: "The validated baseline method. Weights the last three months, emphasizing the most recent to capture momentum. Also the safe fallback when a SKU has too little history to backtest.",
+    formula: "forecast = 0.6·(M-1) + 0.3·(M-2) + 0.1·(M-3)"
+  },
+  {
+    group: "Forecast",
+    term: "Linear Trend",
+    tag: "method",
+    def: "Fits a straight line through the last 6 complete months and projects it forward, so a growing SKU forecasts up and a declining one forecasts down (clamped at 0). Replaces the old flat forecast for trending SKUs.",
+    formula: "forecast(k) = intercept + slope · k"
+  },
+  {
+    group: "Forecast",
+    term: "Seasonal",
+    tag: "method",
+    def: "Multiplies a trend level by a per-calendar-month seasonal index (avg of that month ÷ overall avg). Needs ≥ 12 months of history; falls back to Linear Trend otherwise.",
+    formula: "forecast = trend · (month avg ÷ overall avg)"
+  },
+  {
+    group: "Forecast",
+    term: "Champion Model",
+    tag: "auto-select",
+    def: "Per SKU, the method with the lowest backtest wMAPE (or New SKU +10% for short history) is chosen automatically as the champion and drives that SKU's forecast.",
+    formula: "champion = argmin(wMAPE) over all methods (fallback: New SKU +10% for < 3mo history)"
+  },
+  {
+    group: "Forecast",
+    term: "Forecast Horizon",
+    tag: "window",
+    def: "The forecast covers the next 3 complete calendar months. Evaluated directly from live monthly sales transactions."
+  },
+  {
+    group: "Forecast",
+    term: "Best Estimate (BE) — current month",
+    tag: "projection",
+    def: "Projection of the in-progress month, shown with a * (e.g. Jul*). Month-to-date sales are grossed up by how far through the month the SKU should be, where the progress % mirrors that SKU's own weekly sales curve last month (day-weighted). Context display only.",
+    formula: "BE = month-to-date ÷ progress%"
+  },
+  {
+    group: "Forecast",
+    term: "wMAPE (volume-weighted)",
+    tag: "KPI",
+    def: "Volume-weighted MAPE — the reliable accuracy metric, weighting SKUs by how much they matter. Forecast Accuracy = 100 − wMAPE. Target ≥ 80%.",
+    formula: "Forecast Accuracy = 100 − wMAPE"
+  },
+  {
+    group: "Forecast",
+    term: "Forecast Baseline (published)",
+    tag: "official",
+    def: "A dated snapshot of the champion forecast, locked via the Publish button. It becomes the single official demand figure feeding MPS & MRP.",
+    formula: "run_date · forecast_month · SKU · qty · method"
+  },
+  {
+    group: "Forecast",
+    term: "Forecast Bias",
+    tag: "direction",
+    def: "Whether the forecast systematically runs high or low. Positive = over-forecasting, negative = under-forecasting.",
+    formula: "bias = (Σforecast − Σactual) ÷ Σactual × 100%"
+  },
 
   // ---------- Inventory Health ----------
-  { group: "Inventory", term: "SOH — Stock on Hand", def: "Physical units available in stock (finished-goods warehouses)." },
-  { group: "Inventory", term: "DOI — Days of Inventory", tag: "coverage", def: "How many days current stock will last.", formula: "DOI = SOH ÷ average daily demand" },
-  { group: "Inventory", term: "Weeks of Cover", tag: "coverage", def: "Same idea at weekly grain, for the weekly MPS cadence. Critical < 1 week (below production lead time), Below Min < 30 days.", formula: "SOH ÷ weekly demand run-rate" },
-  { group: "Inventory", term: "Safety / Minimum Stock", tag: "policy", def: "Target buffer to absorb variability.", formula: "FG = 30 days · RMPM = 45 days" },
-  { group: "Inventory", term: "Slow / Dead Stock", def: "SKUs holding stock but with Slow or Dead velocity — capital tied up, obsolescence risk." },
-  { group: "Inventory", term: "Inventory Value (est.)", def: "Estimated value = SOH × average sales price. It is a retail-value estimate; will be replaced by cost/HPP when available." },
+  {
+    group: "Inventory",
+    term: "SOH — Stock on Hand",
+    def: "Physical units available in stock (finished-goods warehouses)."
+  },
+  {
+    group: "Inventory",
+    term: "Stock Cover (Weeks Cover)",
+    tag: "KPI Card",
+    def: "Calculates how many weeks of demand current physical SOH can cover based on recent 3-month sales run-rate. Placed prominently between SOH and Forecast cards in Deep Dive with dynamic status badges.",
+    formula: "Weeks Cover = SOH ÷ (recent 3-month monthly sales ÷ 4.345) · Status: 🔴 Critical Stock (< LT) · ⚠️ Below Min (< LT+SS) · 🟢 Stock Healthy"
+  },
+  {
+    group: "Inventory",
+    term: "DOI — Days of Inventory",
+    tag: "coverage",
+    def: "How many days current stock will last.",
+    formula: "DOI = SOH ÷ average daily demand"
+  },
+  {
+    group: "Inventory",
+    term: "Safety / Minimum Stock",
+    tag: "policy",
+    def: "Target buffer to absorb variability.",
+    formula: "FG = 30 days · RMPM = (lead_time + safety_stock + 7d review) days"
+  },
+  {
+    group: "Inventory",
+    term: "Slow / Non-Moving Stock",
+    def: "SKUs holding stock but with Slow or Non-Moving velocity — capital tied up, obsolescence risk."
+  },
 
   // ---------- Planning & MRP ----------
-  { group: "Planning & MRP", term: "Demand Source", tag: "MPS/MRP input", def: "Where planning demand comes from. When a forecast baseline is published, MPS & MRP use it (monthly baseline ÷ 4.345 = weekly rate); otherwise they fall back to the 12-week sales run-rate. Shown per SKU in the MPS table.", formula: "weekly demand = avg(baseline horizon months) ÷ 4.345" },
-  { group: "Planning & MRP", term: "Net Requirement", tag: "MRP", def: "What actually needs to be produced or ordered. For materials, the target now adapts per material: enough stock to cover its own lead time plus its safety-stock days (from the Material Master), instead of a flat 45 days for everything.", formula: "net = (lead time + safety days) × weekly use ÷ 7 − stock position" },
-  { group: "Planning & MRP", term: "MPS — Master Production Schedule", def: "The weekly finished-goods production plan derived from demand vs stock." },
-  { group: "Planning & MRP", term: "Production Schedule (time-phased)", tag: "weekly plan", def: "Turns the monthly forecast baseline into a week-by-week build plan for the next 8 weeks. Each SKU's monthly demand is spread across weeks by the payday curve, stock is projected forward, and a production order is triggered whenever projected stock would fall below the reorder point.", formula: "per week: closing = opening − demand + production" },
-  { group: "Planning & MRP", term: "(s, S) Reorder Policy", tag: "trigger", def: "How the schedule decides when and how much to make. s (reorder point) = 2 weeks of demand — when projected stock dips below it, produce. S (order-up-to) = the 30-day target — production refills stock back up to S, rounded up to the lot size.", formula: "if projected < s → produce ceil((S − projected) ÷ lot) × lot" },
-  { group: "Planning & MRP", term: "Weekly Pattern / Payday Curve", tag: "seasonality", def: "A multiplier per week-of-month learned from the last 26 weeks of sales, capturing the end-of-month payday lift (from the 25th). Used to shape a flat weekly demand rate into realistic weekly buckets. 💰 marks weeks running above the monthly average.", formula: "factor = avg sales of that week-position ÷ overall avg (mean ≈ 1)" },
-  { group: "Planning & MRP", term: "Line Capacity Load", tag: "constraint", def: "Weekly production load on each line ÷ that line's weekly capacity. Green = OK, amber = tight (>85%), red = over capacity (>100%) — flags weeks where the plan exceeds what a line can physically make so it can be leveled earlier.", formula: "load ÷ (per-shift qty × 15.5 shift-weeks)" },
-  { group: "Planning & MRP", term: "Daily Schedule (finite-capacity leveling)", tag: "day-by-day", def: "The Daily view spreads each week's production across working days without ever exceeding a line's daily capacity (Mon–Fri 3 shifts, Sat half day, Sun off, max 5 SKUs per line per day for changeovers). Priority: SKUs with the lowest stock cover get the earliest slots — the table is sorted in this production order. Daily quantities are allocated in 500-unit lots. If week 1's requirement doesn't fit, the overflow shifts into week 2 (⚠); if it doesn't fit in two weeks at all it's flagged Unscheduled (⛔) — a signal to add shifts or split across lines.", formula: "daily capacity = weekly capacity ÷ 15.5 × day shifts" },
-  { group: "Planning & MRP", term: "Shift Totals", tag: "execution", def: "Total units to produce per shift per day across all lines — the handover number for each shift leader. Mon–Fri splits the day's total evenly across 3 shifts; Saturday is a half day: shift 1 full, shift 2 half, no shift 3.", formula: "Mon–Fri: day ÷ 3 per shift · Sat: ⅔ + ⅓" },
-  { group: "Planning & MRP", term: "Material Gate (RMPM check)", tag: "constraint", def: "The Daily schedule refuses to plan production a material can't support: each SKU's 2-week plan is capped by how many units its BOM components on-hand can build (min across components of SOH ÷ per-unit usage). Scarce material goes to the most critical SKUs first (priority order). Consignment/Daily-supply materials count as always available; components with no stock record are not gated (avoids false blocks from naming differences). Blocked quantity appears in the Material Shortages card with the limiting material and its incoming PO.", formula: "buildable = min over components ⌊material SOH ÷ per-unit usage⌋ → rounded to 500-lot" },
-  { group: "Planning & MRP", term: "Level Strategy (Heijunka)", tag: "shift optimization", def: "Default strategy of the Daily schedule: each line's 2-week requirement is spread evenly across working days (proportional to shifts — Saturday half), so every day and every shift carries a steady, predictable quantity instead of full-then-idle days. The most critical SKUs still take the earliest slots, and anything the even share can't hold is topped up within capacity. Switch to Front-load for maximum urgency instead.", formula: "daily share = line 2-wk total × day shifts ÷ 33 shift-slots" },
-  { group: "Planning & MRP", term: "Free Capacity / OEM Window", tag: "opportunity", def: "Capacity remaining per line per day after the own-product plan — the sellable window for OEM / toll-manufacturing orders. A fully idle day (green) offers the best OEM slot: full single-run capacity with no changeover loss. Turns idle shifts from a blindspot into a measurable commercial asset.", formula: "free = daily line capacity − planned own-product units" },
-  { group: "Planning & MRP", term: "MRP — Material Requirements Planning", def: "Explodes FG demand through the BOM into raw-material & packaging requirements, then into purchase orders." },
-  { group: "Planning & MRP", term: "Material Master (RMPM)", tag: "editable", def: "Per-material planning parameters maintained in the dashboard (Deep Dive → Material Master): vendor, lead time, MOQ, safety-stock days, local/import source, RM/PM class, active status. Seeded automatically from the BOM (import vendors default to 45-day lead time, local 14). Drives the MRP thresholds per material — and unlike the SKU master, it is never overwritten by ETL.", formula: "MRP target = (lead time + safety stock days) of consumption" },
-  { group: "Planning & MRP", term: "Lead Time", tag: "per material", def: "Time from ordering to availability. FG production ≤ 1 week. RMPM lead time is now set per material in the Material Master — local ≈ 14 days, import ≈ 45 days — and defines the Critical threshold in MRP (cover below lead time = can stock out before a new order arrives).", formula: "Critical when cover < lead time ÷ 7 weeks" },
-  { group: "Planning & MRP", term: "MOQ — Minimum Order Quantity", def: "Minimum purchase lot size per material, maintained in the Material Master. Enforced automatically: whenever a material needs ordering, MRP's net requirement and the PO Calendar's suggested quantity are raised to at least the MOQ.", formula: "order qty = max(requirement, MOQ)" },
-  { group: "Planning & MRP", term: "PO Calendar / Release Date", tag: "time-phased", def: "Answers WHEN each purchase order must be released, not just what is short. Stock is projected forward at the weekly usage rate; the week it would hit the safety level is the required arrival — stepping back by the material's lead time gives the release date. Overdue = the order should already be running (matches net requirement > 0). Horizon 8 weeks, so import materials (45-day lead) surface long before they become critical.", formula: "release = (weeks-of-cover − safety days ÷ 7) − lead time ÷ 7" },
-  { group: "Planning & MRP", term: "PO Incoming / Outstanding", def: "Purchase order quantity ordered but not yet received — the incoming supply pipeline.", formula: "outstanding = ordered − received" },
-  { group: "Planning & MRP", term: "MO WIP", def: "Components tied up in Manufacturing Orders that are not yet Done (work in progress). Their RMPM is still counted in stock." },
-  { group: "Planning & MRP", term: "Stock Position", def: "Total material availability per item.", formula: "position = SOH + PO incoming + MO WIP" },
-  { group: "Planning & MRP", term: "Consignment / Daily supply", def: "Materials whose supply is assured — consignment stock held in the warehouse (not yet in Odoo) or delivered daily (e.g. VG, PG). MRP treats them as always available: net requirement = 0, never flagged to order." },
+  {
+    group: "Planning & MRP",
+    term: "Weekly Vendor PO Plan (Senin Cut-off)",
+    tag: "Procurement Plan",
+    def: "Consolidates purchase order requirements by Vendor for a fixed weekly release schedule every Monday. Includes a 7-day Review Cycle Buffer to prevent stockouts between weekly ordering windows, enforcing MOQ per material.",
+    formula: "Order Cut-Off: Every Monday · Target Stock Days = Lead Time + Safety Stock + 7-Day Review Buffer"
+  },
+  {
+    group: "Planning & MRP",
+    term: "Batch Size Rounding (Simulator)",
+    tag: "Production Scheduling",
+    def: "Rounds recommended production batch quantities in Deep Dive & MPS simulator to realistic lot sizes. Set to default 500 pcs.",
+    formula: "Batch Qty = Math.ceil(Requirement ÷ 500) × 500 (default lot: 500 pcs)"
+  },
+  {
+    group: "Planning & MRP",
+    term: "Net Requirement",
+    tag: "MRP",
+    def: "What actually needs to be produced or ordered. For materials, the target adapts per material including lead time, safety stock, and 7-day weekly review cycle.",
+    formula: "net = (lead time + safety days + 7d review) × weekly use ÷ 7 − stock position"
+  },
+  {
+    group: "Planning & MRP",
+    term: "PO Release Calendar / Time-Phased",
+    tag: "PO Calendar",
+    def: "Time-phased view showing WHEN each purchase order must be released over an 8-week horizon so stock never dips below safety level.",
+    formula: "release_date = (week stock hits safety) − lead_time"
+  },
+  {
+    group: "Planning & MRP",
+    term: "MPS — Master Production Schedule",
+    def: "The weekly finished-goods production plan derived from demand vs stock."
+  },
+  {
+    group: "Planning & MRP",
+    term: "Material Master (RMPM)",
+    tag: "editable",
+    def: "Per-material planning parameters maintained in the dashboard (Deep Dive → Material Master): vendor, lead time, MOQ, safety-stock days, local/import source, RM/PM class, active status.",
+    formula: "MRP target = (lead time + safety stock + 7-day review) of consumption"
+  },
+  {
+    group: "Planning & MRP",
+    term: "Lead Time",
+    tag: "per material",
+    def: "Time from ordering to availability. Local suppliers ≈ 14 days, import vendors ≈ 45 days."
+  },
+  {
+    group: "Planning & MRP",
+    term: "MOQ — Minimum Order Quantity",
+    def: "Minimum purchase lot size per material, maintained in the Material Master. Enforced automatically in MRP net requirement and PO Calendar.",
+    formula: "order qty = max(requirement, MOQ)"
+  },
+  {
+    group: "Planning & MRP",
+    term: "Stock Position",
+    def: "Total material availability per item.",
+    formula: "position = SOH + PO incoming + MO WIP"
+  },
+  {
+    group: "Planning & MRP",
+    term: "Consignment / Daily supply",
+    def: "Materials whose supply is assured — consignment stock held in warehouse or delivered daily. Net requirement = 0."
+  },
 
-  // ---------- General ----------
-  { group: "General", term: "FG / SFG / RMPM", def: "Finished Goods · Semi-Finished Goods · Raw Material & Packaging Material." },
-  { group: "General", term: "BOM — Bill of Materials", def: "The recipe: which components (and quantities) make up each finished good." },
-  { group: "General", term: "Continue vs Discontinued", def: "Product status. Only Continue (active) SKUs are in scope for demand & forecast." },
-  { group: "General", term: "Open PO / PO Pipeline", def: "Lines still awaiting goods. The authority on WHICH lines are open is the Tarikan PO export (Odoo's own open-PO query) — in our flow the Odoo status alone is not reliable (active orders often sit in Draft/RFQ, and Done can still have goods arriving). Each open line is then enriched with dates, prices, category and status from the purchase.order export. Shown for POs from the last 12 months; PPIC categories only.", formula: "open = Tarikan outstanding > 0 · enriched from purchase.order · Draft chip = RFQ still running" },
-  { group: "General", term: "PO Book Breakdown", tag: "totals", def: "Grouped totals of the whole PO book (latest snapshot): by Odoo status (Draft/RFQ, Confirmed, Done, Cancelled) and by vendor — each with PO count, lines, quantity and value (ordered vs outstanding). Quantity totals mix units, so treat them as indicative; value in Rp is the comparable measure." },
-  { group: "General", term: "PO Age & Expected Date", tag: "lateness", def: "Age = days since the PO was placed — the primary lateness measure (>30d amber, >60d red). 'Expected' is the internal delivery date auto-filled when the PO was created, not a vendor-confirmed promise — treat it as an indication only." },
-  { group: "General", term: "Force-closed PO (unfulfilled)", tag: "vendor signal", def: "PO lines marked Done with quantity never delivered AND no longer in the open set — truly not coming. The vendor could not fulfil. Tracked per vendor with the unfulfilled value as a reliability signal for sourcing decisions. (Done lines still present in the open set are treated as open, not force-closed.)" },
-  { group: "General", term: "OTIF", def: "On Time In Full — supplier delivery performance. True OTIF needs actual receipt dates (not yet in the export); today the dashboard approximates vendor reliability via PO age, % received, and force-closed history." },
-  { group: "General", term: "SKU", def: "Stock Keeping Unit — a uniquely identified sellable product." },
+  // ---------- Deep Dive & UX ----------
+  {
+    group: "General",
+    term: "Deep Dive SKU & RMPM Drill-Down",
+    tag: "UX & Master Data",
+    def: "Interactive 360° view of single FG SKU or RMPM material repository. Search supports instant paste + Enter auto-navigation. Incorporates live sales series, stock cover indicators, batch rounding simulator (default 500 pcs), and Master Data editor."
+  },
+  {
+    group: "General",
+    term: "FG / SFG / RMPM",
+    def: "Finished Goods · Semi-Finished Goods · Raw Material & Packaging Material."
+  },
+  {
+    group: "General",
+    term: "BOM — Bill of Materials",
+    def: "The recipe: which components (and quantities) make up each finished good."
+  },
+  {
+    group: "General",
+    term: "Continue vs Discontinued",
+    def: "Product status. Discontinued SKUs with remaining SOH are still displayed with full analytics."
+  },
+  {
+    group: "General",
+    term: "SKU",
+    def: "Stock Keeping Unit — a uniquely identified sellable product."
+  }
 ];
 
 const GROUPS = ["All", "Demand", "Forecast", "Inventory", "Planning & MRP", "General"];
@@ -93,14 +293,14 @@ export default function Glossary() {
     <>
       <div className="page-head">
         <h1 className="page-title">Glossary</h1>
-        <div className="page-sub">Definitions of the metrics & terms used across the dashboard</div>
+        <div className="page-sub">Definitions of the metrics, formulas &amp; operational logic used across the dashboard</div>
       </div>
 
       <div style={{ position: "relative", marginBottom: "20px" }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position: 'absolute', left: '16px', top: '16px', color: 'var(--muted)'}}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
         <input
           className="gloss-search"
-          placeholder="Search a term or definition…"
+          placeholder="Search a term, formula or definition…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           style={{ paddingLeft: "46px" }}

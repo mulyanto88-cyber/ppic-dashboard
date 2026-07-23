@@ -13,6 +13,15 @@ const IconShieldAlert = () => <svg width="22" height="22" viewBox="0 0 24 24" fi
 
 const MAT_BADGE = { Critical: "declining", "Below Min": "stable", OK: "growing" };
 
+function getMaterialUom(componentName, dbUom) {
+  if (dbUom && dbUom !== "—" && dbUom !== null) return dbUom;
+  if (!componentName) return "Pcs";
+  const upper = componentName.toUpperCase().trim();
+  const isLiquid = /PROPYLENE GLYCOL|\bPG\b|\bVG\b|VEGETABLE GLYCERIN|SALTNIC|NICOTINE|CHILLER|SWEETNER|SWEETENER|MENTHOL|SUCRALOSE|WS-23|WS-3|\b[A-Z]\d[A-Z]\d{4}\b|FLAVOR|ESSENCE/i.test(upper);
+  if (isLiquid) return "g";
+  return "Pcs";
+}
+
 function q(val, uom) {
   if (uom === "g") return fmt(Math.round(Number(val) / 1000)) + " kg";
   return fmt(val) + (uom ? " " + uom : "");
@@ -698,7 +707,7 @@ export default function DeepDiveClient({
                   {detail.seg.abc_tier && detail.seg.abc_tier !== "—" && <span className={"badge abc-" + String(detail.seg.abc_tier).toLowerCase()}>ABC-qty {detail.seg.abc_tier}</span>}
                   {detail.val.abc_tier_value && <span className={"badge abc-" + String(detail.val.abc_tier_value).toLowerCase()}>ABC-value {detail.val.abc_tier_value}</span>}
                   {detail.seg.xyz_class && <span className={"badge xyz-" + String(detail.seg.xyz_class).toLowerCase()}>{detail.seg.xyz_class}</span>}
-                  {detail.seg.movement_class && <span className={"badge " + String(detail.seg.movement_class).toLowerCase()}>{detail.seg.movement_class}</span>}
+                  {detail.seg.movement_class && <span className={"badge " + (detail.seg.movement_class === "New Launch" ? "method" : String(detail.seg.movement_class).toLowerCase())}>{detail.seg.movement_class === "New Launch" ? "🚀 New Launch" : detail.seg.movement_class}</span>}
                   {detail.seg.trend && <span className={"badge " + String(detail.seg.trend).toLowerCase()}>{detail.seg.trend}</span>}
                 </div>
               </div>
@@ -706,14 +715,30 @@ export default function DeepDiveClient({
               {(() => {
                 const mps = detail.mpsPlan || {};
                 const soh = Number(detail.inv?.soh_qty || mps.soh || 0);
-                const weeklyDemand = Number(mps.weekly_demand || (detail.seg?.avg_monthly ? detail.seg.avg_monthly / 4.345 : 0));
+
+                let monthlyDemand = Number(detail.seg?.avg_monthly || 0);
+                if (detail.sales && detail.sales.length > 0) {
+                  const recentQtySum = detail.sales.slice(-3).reduce((s, r) => s + (Number(r.qty_delivered) || 0), 0);
+                  const recentMonthsCount = Math.min(3, detail.sales.length);
+                  if (recentQtySum > 0 && recentMonthsCount > 0) {
+                    monthlyDemand = Math.max(monthlyDemand, recentQtySum / recentMonthsCount);
+                  }
+                }
+                const weeklyDemand = Number(mps.weekly_demand) > 0 ? Number(mps.weekly_demand) : monthlyDemand / 4.345;
                 const dailyDemand = weeklyDemand / 7;
                 const minStockTarget = Math.round(dailyDemand * 30);
-                
-                const weeksCoverVal = weeklyDemand > 0 
-                  ? (soh / weeklyDemand).toFixed(1) 
-                  : (detail.inv?.doi_days ? (detail.inv.doi_days / 7).toFixed(1) : null);
-                const weeksCoverStr = weeksCoverVal != null ? `${weeksCoverVal} wks` : "—";
+
+                let rawWeeksCover = null;
+                if (weeklyDemand > 0) {
+                  rawWeeksCover = soh / weeklyDemand;
+                } else if (detail.inv?.doi_days) {
+                  rawWeeksCover = Number(detail.inv.doi_days) / 7;
+                }
+
+                let weeksCoverStr = "—";
+                if (rawWeeksCover != null && isFinite(rawWeeksCover)) {
+                  weeksCoverStr = rawWeeksCover > 99 ? ">99" : rawWeeksCover.toFixed(1);
+                }
 
                 const isBelowMin = soh < minStockTarget;
                 const isCritical = soh < minStockTarget * 0.5;
@@ -785,8 +810,13 @@ export default function DeepDiveClient({
                     : <div className="gloss-empty">No sales history.</div>}
                 </div>
                 <div className="card">
-                  <h2 className="card-title">Forecast — 3 Months (3 Models)</h2>
-                  <div className="card-note">Evaluasi 3 Model: WMA, Linear Trend, &amp; Seasonal · Champion: <b>{METHODS[detail.champMethod]?.label || "WMA"}</b></div>
+                  <h2 className="card-title">Forecast — 3 Months ({detail.champMethod === "new_sku_10" ? "New SKU Model" : "3 Models"})</h2>
+                  <div className="card-note">
+                    {detail.champMethod === "new_sku_10"
+                      ? "SKU Baru (< 3 bulan histori sales) · Menggunakan Metode Rencana Growth +10% dari Sales Terakhir"
+                      : "Evaluasi 3 Model: WMA, Linear Trend, & Seasonal"}
+                    &nbsp;· Champion: <b>{METHODS[detail.champMethod]?.label || "WMA"}</b>
+                  </div>
                   <div className="table-wrap">
                     <table className="table">
                       <thead>
@@ -794,7 +824,7 @@ export default function DeepDiveClient({
                           <th>Bulan</th>
                           <th className="num">WMA</th>
                           <th className="num">Linear Trend</th>
-                          <th className="num">Seasonal</th>
+                          <th className="num">{detail.champMethod === "new_sku_10" ? "New SKU (+10%)" : "Seasonal"}</th>
                           <th className="num" style={{ background: "rgba(16, 185, 129, 0.1)", color: "var(--green)" }}>Champion ({METHODS[detail.champMethod]?.label})</th>
                         </tr>
                       </thead>
@@ -802,13 +832,13 @@ export default function DeepDiveClient({
                         {detail.fc.map((r, i) => {
                           const wmaQ = detail.modelFc?.wma?.[i]?.q ?? null;
                           const trendQ = detail.modelFc?.trend?.[i]?.q ?? null;
-                          const seasonalQ = detail.modelFc?.seasonal?.[i]?.q ?? null;
+                          const model3Q = (detail.champMethod === "new_sku_10" ? detail.modelFc?.new_sku_10?.[i]?.q : detail.modelFc?.seasonal?.[i]?.q) ?? null;
                           return (
                             <tr key={i}>
                               <td style={{ fontWeight: 600 }}>{ym(r.ym)}</td>
                               <td className="num">{wmaQ == null ? "—" : fmt(wmaQ)}</td>
                               <td className="num">{trendQ == null ? "—" : fmt(trendQ)}</td>
-                              <td className="num">{seasonalQ == null ? "—" : fmt(seasonalQ)}</td>
+                              <td className="num">{model3Q == null ? "—" : fmt(model3Q)}</td>
                               <td className="num" style={{ fontWeight: "bold", background: "rgba(16, 185, 129, 0.05)", color: "var(--green)" }}>
                                 {fmt(r.q)}
                               </td>
@@ -842,17 +872,18 @@ export default function DeepDiveClient({
                     </thead>
                     <tbody>
                       {detail.bom.map((b, i) => {
-                        const isG = (b.mat.uom || b.stock.uom) === "g";
-                        const displayUom = isG ? "kg" : (b.mat.uom || b.stock.uom || "—");
-                        
+                        const rawUom = getMaterialUom(b.component, b.mat?.uom || b.stock?.uom);
+                        const isG = rawUom === "g";
+                        const displayBadgeUom = isG ? "g" : rawUom;
+
                         const formatVal = (v) => {
                           if (v == null) return "—";
                           const num = Number(v) || 0;
-                          return isG ? (num / 1000).toFixed(1) : fmt(num);
+                          return isG ? (num / 1000).toFixed(1) + " kg" : fmt(num);
                         };
 
-                        const rawSoh = b.stock.soh ?? b.mat.soh;
-                        const rawPO = b.stock.po_incoming ?? b.mat.po_incoming;
+                        const rawSoh = b.stock?.soh ?? b.mat?.soh;
+                        const rawPO = b.stock?.po_incoming ?? b.mat?.po_incoming;
 
                         return (
                           <tr key={i}>
@@ -862,11 +893,11 @@ export default function DeepDiveClient({
                               </a>
                             </td>
                             <td className="num">{b.per_pcs}</td>
-                            <td><span className="badge method">{isG ? "g" : displayUom}</span></td>
+                            <td><span className="badge method">{displayBadgeUom}</span></td>
                             <td className="num">{formatVal(rawSoh)}</td>
                             <td className="num">{formatVal(rawPO)}</td>
-                            <td className="num">{b.mat.weeks_cover == null ? "—" : b.mat.weeks_cover}</td>
-                            <td>{b.mat.status ? <span className={"badge " + (MAT_BADGE[b.mat.status] || "na")}>{b.mat.status}</span> : <span className="badge na">No Demand</span>}</td>
+                            <td className="num">{b.mat?.weeks_cover == null ? "—" : b.mat.weeks_cover}</td>
+                            <td>{b.mat?.status ? <span className={"badge " + (MAT_BADGE[b.mat.status] || "na")}>{b.mat.status}</span> : <span className="badge na">No Demand</span>}</td>
                           </tr>
                         );
                       })}

@@ -183,22 +183,91 @@ export default function DemandAnalyticsClient({
     return Object.values(weekMap).sort((a, b) => (a.week_start > b.week_start ? 1 : -1));
   }, [isFiltered, weeklyTrend, salesWeekly12, filteredSkuSet]);
 
+  // Live Movement Map per SKU based on real sales history & quantiles per Type
+  const liveMovementMap = useMemo(() => {
+    if (!salesMonthly18 || salesMonthly18.length === 0) return {};
+
+    const maxMonth = salesMonthly18.reduce((max, s) => (s.month > max ? s.month : max), "2000-01-01");
+    const maxDate = new Date(maxMonth);
+    const d3 = new Date(maxDate.getFullYear(), maxDate.getMonth() - 2, 1);
+    const cutoff3m = `${d3.getFullYear()}-${String(d3.getMonth() + 1).padStart(2, "0")}-01`;
+
+    const skuSales = {};
+    salesMonthly18.forEach((s) => {
+      const k = (s.sku_name || "").toUpperCase().trim();
+      const q = Number(s.qty_delivered || 0);
+      if (q <= 0) return;
+      if (!skuSales[k]) skuSales[k] = { minMonth: s.month, qty_3m: 0, qty_12m: 0 };
+      if (s.month < skuSales[k].minMonth) skuSales[k].minMonth = s.month;
+      skuSales[k].qty_12m += q;
+      if (s.month >= cutoff3m) skuSales[k].qty_3m += q;
+    });
+
+    const byType = {};
+    filteredSkuValue.forEach((v) => {
+      const k = (v.sku_name || "").toUpperCase().trim();
+      const pm = productMaster.find((p) => (p.sku_name || "").toUpperCase().trim() === k);
+      const type = pm?.type || segMap[v.sku_name]?.type || "Other";
+      const info = skuSales[k] || { minMonth: "9999-99-99", qty_3m: 0, qty_12m: 0 };
+
+      const item = {
+        sku_name: v.sku_name,
+        type,
+        minMonth: info.minMonth,
+        qty_3m: info.qty_3m,
+        qty_12m: Number(v.qty_12m || 0),
+        isNew: info.minMonth >= cutoff3m && info.minMonth !== "9999-99-99",
+      };
+
+      if (!byType[type]) byType[type] = [];
+      byType[type].push(item);
+    });
+
+    const outMap = {};
+    for (const [type, items] of Object.entries(byType)) {
+      const newItems = items.filter((i) => i.isNew);
+      const deadItems = items.filter((i) => !i.isNew && i.qty_3m <= 0);
+      const estItems = items.filter((i) => !i.isNew && i.qty_3m > 0);
+
+      estItems.sort((a, b) => b.qty_3m - a.qty_3m);
+      const tot3m = estItems.reduce((s, i) => s + i.qty_3m, 0);
+
+      let cum = 0;
+      for (const item of estItems) {
+        const prevCumPct = tot3m > 0 ? cum / tot3m : 0;
+        cum += item.qty_3m;
+        if (prevCumPct < 0.80) outMap[item.sku_name] = "Fast";
+        else if (prevCumPct < 0.95) outMap[item.sku_name] = "Medium";
+        else outMap[item.sku_name] = "Slow";
+      }
+
+      for (const item of newItems) outMap[item.sku_name] = "New Launch";
+      for (const item of deadItems) outMap[item.sku_name] = "Non-Moving";
+    }
+
+    return outMap;
+  }, [salesMonthly18, productMaster, filteredSkuValue, segMap]);
+
   // 4. Velocity Distribution (Movement Summary)
   const movement = useMemo(() => {
-    const classes = ["Fast", "Medium", "Slow", "Dead"];
+    const classes = ["New Launch", "Fast", "Medium", "Slow", "Non-Moving"];
     const agg = {
+      "New Launch": { sku_count: 0, qty_12m: 0 },
       Fast: { sku_count: 0, qty_12m: 0 },
       Medium: { sku_count: 0, qty_12m: 0 },
       Slow: { sku_count: 0, qty_12m: 0 },
-      Dead: { sku_count: 0, qty_12m: 0 },
+      "Non-Moving": { sku_count: 0, qty_12m: 0 },
     };
 
     filteredSkuValue.forEach((v) => {
-      const s = segMap[v.sku_name];
-      const mClass = s?.movement_class || "Slow";
+      let mClass = liveMovementMap[v.sku_name] || segMap[v.sku_name]?.movement_class || "Slow";
+      if (mClass === "Dead") mClass = "Non-Moving";
       if (agg[mClass]) {
         agg[mClass].sku_count += 1;
         agg[mClass].qty_12m += Number(v.qty_12m || 0);
+      } else {
+        agg["Slow"].sku_count += 1;
+        agg["Slow"].qty_12m += Number(v.qty_12m || 0);
       }
     });
 
@@ -207,7 +276,7 @@ export default function DemandAnalyticsClient({
       sku_count: agg[c].sku_count,
       qty_12m: agg[c].qty_12m,
     }));
-  }, [filteredSkuValue, segMap]);
+  }, [filteredSkuValue, liveMovementMap, segMap]);
 
   const movSku = useMemo(() => movement.reduce((s, m) => s + Number(m.sku_count || 0), 0), [movement]);
   const movVol = useMemo(() => movement.reduce((s, m) => s + Number(m.qty_12m || 0), 0), [movement]);
